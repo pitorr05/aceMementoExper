@@ -14,7 +14,7 @@ ACE-pre-release/
 │   │   ├── generator.py         # Generator agent
 │   │   ├── reflector.py         # Reflector agent
 │   │   ├── curator.py           # Curator agent
-│   │   └── bulletpoint_analyzer.py       # Bulletpoint analyzer for playbook de-duplication
+│   │   └── bulletpoint_analyzer.py  # Bulletpoint analyzer for playbook de-duplication
 │   ├── prompts/                 # Prompt templates
 │   │   ├── __init__.py
 │   │   ├── generator.py         # Generator prompts
@@ -24,7 +24,7 @@ ACE-pre-release/
 │   └── ace.py                   # Main ACE orchestrator
 │
 ├── finance/                     # Finance domain implementation (reference example)
-│   ├── data_processor.py        # Finance data processing
+│   ├── data_processor.py        # Finance data processing  
 │   └── run.py                   # Unified training and evaluation script
 │
 ├── llm.py                       # LLM utilities
