@@ -64,7 +64,9 @@ class ACE(ACEMementoRunner):
         adversarial_model: Optional[str] = None,
         memory_jsonl_path: str = "./results/case_bank.jsonl",
         case_bank_top_k: int = 4,
-        device: str = "cpu"
+        device: str = "cpu",
+        parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
+        retriever_model_path: Optional[str] = None,
     ):
         super().__init__(
             api_provider=api_provider,
@@ -82,7 +84,9 @@ class ACE(ACEMementoRunner):
             use_adversarial=use_adversarial,
             adversarial_frequency=adversarial_frequency,
             adversarial_model=adversarial_model,
-            device=device
+            device=device,
+            parametric_model_name=parametric_model_name,
+            retriever_model_path=retriever_model_path,
         )
 
 
@@ -102,7 +106,9 @@ class HierarchicalClient:
         use_rae: bool = True,
         rae_top_k: int = 10,
         case_bank_top_k: int = 4,
-        device: str = "cpu"
+        device: str = "cpu",
+        parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
+        retriever_model_path: Optional[str] = None,
     ):
         # We reuse ACEMementoRunner internally
         # Load initial playbook if path is provided
@@ -121,7 +127,9 @@ class HierarchicalClient:
             use_rae=use_rae,
             rae_top_k=rae_top_k,
             case_bank_top_k=case_bank_top_k,
-            device=device
+            device=device,
+            parametric_model_name=parametric_model_name,
+            retriever_model_path=retriever_model_path,
         )
         self._memory_items = []
         self._memory_pairs = []

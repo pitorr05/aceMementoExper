@@ -17,6 +17,55 @@ from .core.adversarial_agent import AdversarialAgent
 from .utils.llm import initialize_clients
 
 
+def find_latest_playbook(run_path: str) -> Tuple[Optional[str], int, int]:
+    """
+    Scans run_path for saved playbook files and finds the one corresponding to the largest step.
+    Returns (playbook_filepath, epoch, step).
+    If no playbook file is found, returns (None, 1, 0).
+    """
+    max_epoch = 1
+    max_step = 0
+    latest_file = None
+
+    if not os.path.exists(run_path):
+        return None, 1, 0
+
+    for fname in os.listdir(run_path):
+        # Match epoch_{epoch}_step_{step}_playbook.txt
+        m = re.match(r"^epoch_(\d+)_step_(\d+)_playbook\.txt$", fname)
+        if m:
+            epoch = int(m.group(1))
+            step = int(m.group(2))
+            if (epoch > max_epoch) or (epoch == max_epoch and step > max_step):
+                max_epoch = epoch
+                max_step = step
+                latest_file = os.path.join(run_path, fname)
+            continue
+
+        # Match step_{step}_playbook.txt (online mode)
+        m = re.match(r"^step_(\d+)_playbook\.txt$", fname)
+        if m:
+            step = int(m.group(1))
+            if step > max_step:
+                max_epoch = 1
+                max_step = step
+                latest_file = os.path.join(run_path, fname)
+            continue
+
+        # Match playbook_epoch_{epoch}.txt
+        m = re.match(r"^playbook_epoch_(\d+)\.txt$", fname)
+        if m:
+            epoch = int(m.group(1))
+            if epoch > max_epoch:
+                max_epoch = epoch
+                max_step = 0
+                latest_file = os.path.join(run_path, fname)
+            continue
+
+    return latest_file, max_epoch, max_step
+
+
+
 class ACEMementoRunner:
     """
     Main ACE-Memento Orchestrator.
@@ -42,7 +91,9 @@ class ACEMementoRunner:
         adversarial_frequency: int = 10,
         adversarial_model: Optional[str] = None,
         server_scripts: Optional[List[str]] = None,
-        device: str = "cpu"
+        device: str = "cpu",
+        parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
+        retriever_model_path: Optional[str] = None
     ):
         self.api_provider = api_provider
         self.generator_model = generator_model
@@ -52,6 +103,8 @@ class ACEMementoRunner:
         self.use_rae = use_rae
         self.rae_top_k = rae_top_k
         self.case_bank_top_k = case_bank_top_k
+        self.parametric_model_name = parametric_model_name
+        self.retriever_model_path = retriever_model_path
 
         # Initialize clients
         generator_client, reflector_client, curator_client = initialize_clients(api_provider)
@@ -66,6 +119,8 @@ class ACEMementoRunner:
         self.case_bank = CaseBank(
             memory_jsonl_path=memory_jsonl_path,
             top_k=case_bank_top_k,
+            parametric_model_name=parametric_model_name,
+            retriever_model_path=retriever_model_path,
             device=device
         )
 
@@ -117,12 +172,13 @@ class ACEMementoRunner:
         val_samples: Optional[List[Dict[str, Any]]] = None,
         test_samples: Optional[List[Dict[str, Any]]] = None,
         data_processor: Any = None,
-        config: Optional[Dict[str, Any]] = None
+        config: Optional[Dict[str, Any]] = None,
+        resume_from: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Synchronous wrapper around run_async to execute the runner loop.
         """
-        return asyncio.run(self.run_async(mode, train_samples, val_samples, test_samples, data_processor, config))
+        return asyncio.run(self.run_async(mode, train_samples, val_samples, test_samples, data_processor, config, resume_from))
 
     async def run_async(
         self,
@@ -131,26 +187,117 @@ class ACEMementoRunner:
         val_samples: Optional[List[Dict[str, Any]]] = None,
         test_samples: Optional[List[Dict[str, Any]]] = None,
         data_processor: Any = None,
-        config: Optional[Dict[str, Any]] = None
+        config: Optional[Dict[str, Any]] = None,
+        resume_from: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Main run entry point for offline/online training or evaluation.
         """
         config = config or {}
+        resume_epoch = 1
+        resume_step = 0
+
+        if resume_from:
+            run_path = resume_from
+            run_config_path = os.path.join(run_path, "run_config.json")
+            if os.path.exists(run_config_path):
+                try:
+                    with open(run_config_path, "r", encoding="utf-8") as f:
+                        loaded_config = json.load(f)
+                    # Merge loaded config with passed config (passed config overrides)
+                    config = {**loaded_config, **config}
+                    print(f"Loaded config from {run_config_path}")
+                except Exception as e:
+                    print(f"Warning: Failed to load config from {run_config_path}: {e}")
+
+            latest_playbook_path, resume_epoch, resume_step = find_latest_playbook(run_path)
+            if latest_playbook_path:
+                print(f"Resuming from epoch {resume_epoch}, step {resume_step} using playbook {latest_playbook_path}")
+                try:
+                    with open(latest_playbook_path, "r", encoding="utf-8") as f:
+                        resume_playbook = f.read()
+                    self.playbook_manager.update_playbook(resume_playbook)
+                    self._recompute_next_global_id()
+                except Exception as e:
+                    print(f"Error reading playbook {latest_playbook_path}: {e}")
+            else:
+                print("No intermediate playbook found in resume folder. Starting from epoch 1, step 0.")
+                resume_epoch = 1
+                resume_step = 0
+        else:
+            save_dir = config.get("save_dir", "./results")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            run_folder = f"ace_memento_{timestamp}_{mode}"
+            run_path = os.path.join(save_dir, run_folder)
+            os.makedirs(run_path, exist_ok=True)
+
+            # Save configuration for future resumes
+            run_config = {
+                "api_provider": self.api_provider,
+                "generator_model": self.generator_model,
+                "reflector_model": self.reflector_model,
+                "curator_model": self.curator_model,
+                "max_tokens": self.max_tokens,
+                "use_rae": self.use_rae,
+                "rae_top_k": self.rae_top_k,
+                "case_bank_top_k": self.case_bank_top_k,
+                "use_failure_memory": self.use_failure_memory,
+                "failure_memory_top_k": self.failure_memory_top_k,
+                "use_adversarial": self.use_adversarial,
+                "adversarial_frequency": self.adversarial_frequency,
+                "parametric_model_name": self.parametric_model_name,
+                "retriever_model_path": self.retriever_model_path,
+                **config
+            }
+            run_config_path = os.path.join(run_path, "run_config.json")
+            try:
+                with open(run_config_path, "w", encoding="utf-8") as f:
+                    json.dump(run_config, f, indent=2)
+            except Exception as e:
+                print(f"Warning: Failed to save config to {run_config_path}: {e}")
+
+        log_dir = os.path.join(run_path, "logs")
+        os.makedirs(log_dir, exist_ok=True)
+
         num_epochs = config.get("num_epochs", 1)
         max_num_rounds = config.get("max_num_rounds", 3)
         token_budget = config.get("playbook_token_budget", 80000)
-        save_dir = config.get("save_dir", "./results")
+
+        # Isolate CaseBank to the run directory
+        run_case_bank_path = os.path.join(run_path, "case_bank.jsonl")
+        if os.path.exists(self.case_bank.memory_jsonl_path) and not os.path.exists(run_case_bank_path):
+            try:
+                import shutil
+                os.makedirs(os.path.dirname(run_case_bank_path), exist_ok=True)
+                shutil.copy(self.case_bank.memory_jsonl_path, run_case_bank_path)
+                print(f"Copied base case bank to {run_case_bank_path}")
+            except Exception as e:
+                print(f"Warning: Failed to copy case bank to run dir: {e}")
         
+        self.case_bank.memory_jsonl_path = run_case_bank_path
+
+        # Truncate case bank to remove duplicate steps if resuming
+        if resume_from and os.path.exists(self.case_bank.memory_jsonl_path):
+            if mode == "offline":
+                total_steps_completed = (resume_epoch - 1) * len(train_samples or []) + resume_step
+            else:
+                total_steps_completed = resume_step
+
+            try:
+                with open(self.case_bank.memory_jsonl_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                if len(lines) > total_steps_completed:
+                    print(f"Truncating case bank to {total_steps_completed} cases to prevent duplicate records upon resuming.")
+                    with open(self.case_bank.memory_jsonl_path, "w", encoding="utf-8") as f:
+                        f.writelines(lines[:total_steps_completed])
+            except Exception as e:
+                print(f"Warning: Failed to truncate case bank: {e}")
+
+        # Reload cases from the run-isolated file
+        self.case_bank.load_cases()
+
         # Connect executor stdio servers
         await self.executor.connect_mcp_servers()
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_folder = f"ace_memento_{timestamp}_{mode}"
-        run_path = os.path.join(save_dir, run_folder)
-        os.makedirs(run_path, exist_ok=True)
-        log_dir = os.path.join(run_path, "logs")
-        os.makedirs(log_dir, exist_ok=True)
 
         results = {}
         best_accuracy = 0.0
@@ -158,7 +305,8 @@ class ACEMementoRunner:
 
         if mode == "offline":
             initial_test_accuracy = 0.0
-            if test_samples:
+            # Skip initial test on resume to save time and API costs
+            if test_samples and not resume_from:
                 initial_test_res = await self._run_test(
                     test_samples=test_samples,
                     data_processor=data_processor,
@@ -174,9 +322,15 @@ class ACEMementoRunner:
             train_results = []
             
             for epoch in range(1, num_epochs + 1):
+                if epoch < resume_epoch:
+                    print(f"Skipping Epoch {epoch} (already completed)")
+                    continue
                 print(f"--- Epoch {epoch}/{num_epochs} ---")
                 
                 for step, sample in enumerate(train_samples or [], 1):
+                    if epoch == resume_epoch and step <= resume_step:
+                        print(f"Skipping Step {step} (already completed)")
+                        continue
                     print(f"\n--- Train Step {step}/{len(train_samples)} ---")
                     
                     # 1. Retrieve dual memory contexts
@@ -403,7 +557,8 @@ class ACEMementoRunner:
         elif mode == "online":
             print(f"--- Starting Online Training on {len(test_samples or [])} samples ---")
             initial_test_accuracy = 0.0
-            if test_samples:
+            # Skip initial test on resume to save time and API costs
+            if test_samples and not resume_from:
                 initial_test_res = await self._run_test(
                     test_samples=test_samples,
                     data_processor=data_processor,
@@ -420,16 +575,34 @@ class ACEMementoRunner:
             correct_count = 0
             total_count = 0
             
+            if resume_step > 0:
+                # Reconstruct correct_count and total_count from CaseBank
+                completed_cases = self.case_bank.cases[:resume_step]
+                correct_count = sum(1 for c in completed_cases if c.get("reward") == 1)
+                total_count = len(completed_cases)
+                print(f"Reconstructed online test progress from case bank: {correct_count}/{total_count} correct so far.")
+
             for win_idx in range(num_windows):
                 start_idx = win_idx * online_eval_freq
                 end_idx = min(start_idx + online_eval_freq, len(test_samples))
                 win_samples = test_samples[start_idx:end_idx]
                 
-                print(f"\n--- Window {win_idx + 1}/{num_windows} (Samples {start_idx} to {end_idx - 1}) ---")
+                # Filter unseen samples in this window for testing to prevent double-counting
+                win_samples_test = []
+                for local_idx, sample in enumerate(win_samples, 1):
+                    global_step = start_idx + local_idx
+                    if global_step > resume_step:
+                        win_samples_test.append(sample)
+                
+                # If the entire window is already trained, skip it entirely
+                if not win_samples_test:
+                    continue
+
+                print(f"\n--- Window {win_idx + 1}/{num_windows} (Samples {start_idx} to {end_idx - 1}, remaining test: {len(win_samples_test)}) ---")
                 
                 # Test on window (before training on it)
                 win_test_res = await self._run_test(
-                    test_samples=win_samples,
+                    test_samples=win_samples_test,
                     data_processor=data_processor,
                     playbook=self.playbook_manager.playbook,
                     config=config,
@@ -442,6 +615,8 @@ class ACEMementoRunner:
                 # Train on window
                 for local_step, sample in enumerate(win_samples, 1):
                     global_step = start_idx + local_step
+                    if global_step <= resume_step:
+                        continue
                     print(f"\n--- Window {win_idx + 1}, Step {local_step}/{len(win_samples)} (Global step {global_step}) ---")
                     
                     query = sample.get("question", "")

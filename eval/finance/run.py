@@ -101,10 +101,18 @@ def parse_args():
                         help="Run adversarial episode every N steps (default: 10)")
     parser.add_argument("--adversarial_model", type=str, default=None,
                         help="Model for adversarial agent (defaults to generator model)")
+
+    # Parametric Memory CaseBank configuration
+    parser.add_argument("--retriever_model_path", type=str, default=None,
+                        help="Path to neural retriever checkpoint for parametric retrieval in CaseBank")
+    parser.add_argument("--parametric_model_name", type=str, default="princeton-nlp/sup-simcse-roberta-base",
+                        help="HuggingFace model backbone name for parametric retriever model")
     
     # Output configuration
-    parser.add_argument("--save_path", type=str, required=True,
+    parser.add_argument("--save_path", type=str, default=None,
                         help="Directory to save results")
+    parser.add_argument("--resume_from", type=str, default=None,
+                        help="Path to an existing run folder to resume from")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility")
     
@@ -196,6 +204,29 @@ def load_initial_playbook(path):
 def main():
     """Main execution function."""
     args = parse_args()
+    if not args.resume_from and not args.save_path:
+        raise ValueError("Either --save_path or --resume_from must be specified")
+
+    import sys
+    # Reload parameters from run_config.json if resume_from is specified
+    if args.resume_from:
+        config_path = os.path.join(args.resume_from, "run_config.json")
+        if os.path.exists(config_path):
+            print(f">>> [INFO] Reloading parameters from {config_path}")
+            with open(config_path, "r", encoding="utf-8") as f:
+                saved_config = json.load(f)
+            
+            # Find which arguments were explicitly passed on CLI
+            passed_keys = []
+            for arg in sys.argv[1:]:
+                if arg.startswith("--"):
+                    key = arg[2:].split("=")[0].replace("-", "_")
+                    passed_keys.append(key)
+            
+            # Override args with saved values unless explicitly overridden on CLI
+            for k, v in saved_config.items():
+                if hasattr(args, k) and k not in passed_keys:
+                    setattr(args, k, v)
 
     set_global_seed(args.seed)
     print(f"Using seed: {args.seed}")
@@ -242,6 +273,8 @@ def main():
         adversarial_model=args.adversarial_model,
         use_adversarial=args.use_adversarial,
         adversarial_frequency=args.adversarial_frequency,
+        parametric_model_name=args.parametric_model_name,
+        retriever_model_path=args.retriever_model_path,
     )
     
     # Prepare configuration
@@ -270,6 +303,8 @@ def main():
         'use_adversarial': args.use_adversarial,
         'adversarial_frequency': args.adversarial_frequency,
         'seed': args.seed,
+        'retriever_model_path': args.retriever_model_path,
+        'parametric_model_name': args.parametric_model_name,
     }
     
     if args.mode == "eval_only" and test_samples:
@@ -283,7 +318,8 @@ def main():
         val_samples=val_samples,
         test_samples=test_samples,
         data_processor=data_processor,
-        config=config
+        config=config,
+        resume_from=args.resume_from
     )
         
 
