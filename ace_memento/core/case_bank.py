@@ -109,7 +109,7 @@ class CaseBank:
         embedding_model_name: str = "BAAI/bge-m3",
         parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
         retriever_model_path: Optional[str] = None,
-        device: str = "cpu"
+        device: str = "cpu",
     ):
         self.memory_jsonl_path = memory_jsonl_path
         self.top_k = top_k
@@ -117,6 +117,7 @@ class CaseBank:
         self.parametric_model_name = parametric_model_name
         self.retriever_model_path = retriever_model_path
         self.device = device if device != "auto" else ("cuda" if TORCH_AVAILABLE and torch.cuda.is_available() else "cpu")
+        self.device = "cpu"
         self.cases: List[Dict[str, Any]] = []
 
         # Lazy loaded components
