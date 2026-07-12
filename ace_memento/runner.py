@@ -91,7 +91,7 @@ class ACEMementoRunner:
         adversarial_frequency: int = 10,
         adversarial_model: Optional[str] = None,
         server_scripts: Optional[List[str]] = None,
-        device: str = "cpu",
+        device: str = "cuda",
         parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
         retriever_model_path: Optional[str] = None
     ):
