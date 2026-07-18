@@ -115,7 +115,12 @@ def parse_args():
                         help="Path to an existing run folder to resume from")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility")
-    
+    parser.add_argument("--full_bench", action="store_true",
+                        help="Run evaluation on the full test set instead of limiting to 50 samples")
+    parser.add_argument("--track_ttft", action="store_true",
+                        help="Track and calculate TTFT (Time to First Token) metric")
+    parser.add_argument("--track_tpot", action="store_true",
+                        help="Track and calculate TPOT (Time Per Output Token) metric")
     return parser.parse_args()
 
 def load_data(data_path: str):
@@ -204,6 +209,12 @@ def load_initial_playbook(path):
 def main():
     """Main execution function."""
     args = parse_args()
+    if args.track_ttft:
+        os.environ["TRACK_TTFT"] = "1"
+        print(">>> [INFO] Tracking TTFT speed metric enabled")
+    if args.track_tpot:
+        os.environ["TRACK_TPOT"] = "1"
+        print(">>> [INFO] Tracking TPOT speed metric enabled")
     if not args.resume_from and not args.save_path:
         raise ValueError("Either --save_path or --resume_from must be specified")
 
@@ -307,9 +318,9 @@ def main():
         'parametric_model_name': args.parametric_model_name,
     }
     
-    if args.mode == "eval_only" and test_samples:
+    if args.mode == "eval_only" and test_samples and not args.full_bench:
         test_samples = test_samples[:50]
-        print(f">>> [INFO] Limited test samples to first 50 for quick verification")
+        print(f">>> [INFO] Limited test samples to first 50 for quick verification. Pass --full_bench to run the full benchmark.")
 
     # Execute using the unified run method
     results = ace_system.run(
