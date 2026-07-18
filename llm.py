@@ -75,26 +75,87 @@ def timed_llm_call(client, api_provider, model, prompt, role, call_id, max_token
                         "max_new_tokens": max_tokens,
                     },
                 }
-                call_start = time.time()
-                req = request.Request(
-                    endpoint,
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                timeout_seconds = float(os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "180"))
-                with request.urlopen(req, timeout=timeout_seconds) as resp:
-                    raw = resp.read().decode("utf-8")
-                call_end = time.time()
+                
+                track_ttft = os.getenv("TRACK_TTFT", "0") == "1"
+                track_tpot = os.getenv("TRACK_TPOT", "0") == "1"
+                use_streaming = track_ttft or track_tpot
+                ttft = None
+                tpot = None
+                prompt_tokens = None
+                completion_tokens = None
+                
+                if use_streaming:
+                    try:
+                        payload["stream"] = True
+                        call_start = time.time()
+                        req = request.Request(
+                            endpoint,
+                            data=json.dumps(payload).encode("utf-8"),
+                            headers={"Content-Type": "application/json"},
+                            method="POST",
+                        )
+                        timeout_seconds = float(os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "180"))
+                        first_token_time = None
+                        chunks = []
+                        
+                        with request.urlopen(req, timeout=timeout_seconds) as resp:
+                            for line in resp:
+                                line = line.decode("utf-8").strip()
+                                if not line:
+                                    continue
+                                if line.startswith("data:"):
+                                    data_str = line[5:].strip()
+                                    if data_str == "[DONE]":
+                                        break
+                                    try:
+                                        data_json = json.loads(data_str)
+                                        text_delta = data_json.get("text")
+                                        if text_delta:
+                                            if first_token_time is None:
+                                                first_token_time = time.time()
+                                            chunks.append(text_delta)
+                                    except Exception:
+                                        pass
+                        call_end = time.time()
+                        response_content = "".join(chunks)
+                        
+                        total_time = call_end - call_start
+                        ttft_val = (first_token_time - call_start) if first_token_time else total_time
+                        if track_ttft:
+                            ttft = ttft_val
+                        
+                        from utils import count_tokens
+                        prompt_tokens = count_tokens(prompt)
+                        completion_tokens = count_tokens(response_content)
+                        
+                        if track_tpot:
+                            generation_time = max(0.0, total_time - ttft_val)
+                            tpot = (generation_time / completion_tokens) if (completion_tokens and completion_tokens > 0) else 0.0
+                    except Exception as e:
+                        print(f"[Warning] SGLang streaming failed, falling back to non-stream: {e}")
+                        use_streaming = False
+                        
+                if not use_streaming:
+                    call_start = time.time()
+                    req = request.Request(
+                        endpoint,
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    timeout_seconds = float(os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "180"))
+                    with request.urlopen(req, timeout=timeout_seconds) as resp:
+                        raw = resp.read().decode("utf-8")
+                    call_end = time.time()
 
-                response_json = json.loads(raw)
-                if isinstance(response_json, dict):
-                    if isinstance(response_json.get("text"), list) and response_json.get("text"):
-                        response_content = response_json["text"][0]
+                    response_json = json.loads(raw)
+                    if isinstance(response_json, dict):
+                        if isinstance(response_json.get("text"), list) and response_json.get("text"):
+                            response_content = response_json["text"][0]
+                        else:
+                            response_content = response_json.get("text") or response_json.get("generated_text")
                     else:
-                        response_content = response_json.get("text") or response_json.get("generated_text")
-                else:
-                    response_content = None
+                        response_content = None
 
                 if response_content is None:
                     raise Exception("Empty response from API")
@@ -113,8 +174,10 @@ def timed_llm_call(client, api_provider, model, prompt, role, call_id, max_token
                     "call_time": call_end - call_start,
                     "prompt_length": len(prompt),
                     "response_length": len(response_content),
-                    "prompt_num_tokens": None,
-                    "response_num_tokens": None,
+                    "prompt_num_tokens": prompt_tokens,
+                    "response_num_tokens": completion_tokens,
+                    "ttft": ttft,
+                    "tpot": tpot
                 }
 
                 print(f"[{role.upper()}] Call {call_id} completed in {total_time:.2f}s")
@@ -138,20 +201,83 @@ def timed_llm_call(client, api_provider, model, prompt, role, call_id, max_token
             # Add JSON mode if requested
             if use_json_mode:
                 api_params["response_format"] = {"type": "json_object"}
-            call_start = time.time()
-            response = active_client.chat.completions.create(**api_params)
-            call_end = time.time()
+                
+            track_ttft = os.getenv("TRACK_TTFT", "0") == "1"
+            track_tpot = os.getenv("TRACK_TPOT", "0") == "1"
+            use_streaming = track_ttft or track_tpot
+            ttft = None
+            tpot = None
+            prompt_tokens = None
+            completion_tokens = None
             
-            # Check if response is valid
-            if not response or not response.choices or len(response.choices) == 0:
-                raise Exception("Empty response from API")
+            if use_streaming:
+                api_params["stream"] = True
+                if api_provider in ["openai", "vllm", "sambanova", "together"]:
+                    api_params["stream_options"] = {"include_usage": True}
+                    
+                call_start = time.time()
+                try:
+                    response_stream = active_client.chat.completions.create(**api_params)
+                except Exception as stream_err:
+                    if "stream_options" in api_params:
+                        del api_params["stream_options"]
+                        response_stream = active_client.chat.completions.create(**api_params)
+                    else:
+                        raise stream_err
+                        
+                first_token_time = None
+                chunks = []
+                usage = None
+                
+                for chunk in response_stream:
+                    if chunk.choices and len(chunk.choices) > 0:
+                        delta = chunk.choices[0].delta
+                        if first_token_time is None and delta.content:
+                            first_token_time = time.time()
+                        if delta.content:
+                            chunks.append(delta.content)
+                    if hasattr(chunk, 'usage') and chunk.usage:
+                        usage = chunk.usage
+                        
+                call_end = time.time()
+                response_content = "".join(chunks)
+                
+                total_time = call_end - call_start
+                ttft_val = (first_token_time - call_start) if first_token_time else total_time
+                if track_ttft:
+                    ttft = ttft_val
+                
+                prompt_tokens = usage.prompt_tokens if usage else None
+                completion_tokens = usage.completion_tokens if usage else None
+                
+                if prompt_tokens is None:
+                    from utils import count_tokens
+                    prompt_tokens = count_tokens(prompt)
+                if completion_tokens is None:
+                    from utils import count_tokens
+                    completion_tokens = count_tokens(response_content)
+                    
+                if track_tpot:
+                    generation_time = max(0.0, total_time - ttft_val)
+                    tpot = (generation_time / completion_tokens) if (completion_tokens and completion_tokens > 0) else 0.0
+                
+            else:
+                call_start = time.time()
+                response = active_client.chat.completions.create(**api_params)
+                call_end = time.time()
+                
+                if not response or not response.choices or len(response.choices) == 0:
+                    raise Exception("Empty response from API")
+                
+                response_content = response.choices[0].message.content
+                if response_content is None:
+                    raise Exception("API returned None content")
+                    
+                prompt_tokens = response.usage.prompt_tokens if hasattr(response, 'usage') and response.usage else None
+                completion_tokens = response.usage.completion_tokens if hasattr(response, 'usage') and response.usage else None
             
             response_time = time.time()
             total_time = response_time - start_time
-            response_content = response.choices[0].message.content
-            
-            if response_content is None:
-                raise Exception("API returned None content")
             
             call_info = {
                 "role": role,
@@ -165,8 +291,10 @@ def timed_llm_call(client, api_provider, model, prompt, role, call_id, max_token
                 "call_time": call_end - call_start,
                 "prompt_length": len(prompt),
                 "response_length": len(response_content),
-                "prompt_num_tokens": response.usage.prompt_tokens,
-                "response_num_tokens": response.usage.completion_tokens,
+                "prompt_num_tokens": prompt_tokens,
+                "response_num_tokens": completion_tokens,
+                "ttft": ttft,
+                "tpot": tpot
             }
             
             print(f"[{role.upper()}] Call {call_id} completed in {total_time:.2f}s")
