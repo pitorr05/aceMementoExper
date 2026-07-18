@@ -44,6 +44,9 @@ def parse_args():
                         help="Disable RAE")
     parser.add_argument("--no_failure_memory", action="store_false", dest="use_failure_memory",
                         help="Disable Failure Memory")
+    parser.add_argument("--device", type=str, default="cuda",
+                        choices=["cuda", "cpu"],
+                        help="Device to use: cuda or cpu")
     return parser.parse_args()
 
 
@@ -105,7 +108,7 @@ def main():
         use_failure_memory=args.use_failure_memory,
         failure_memory_top_k=3,
         memory_jsonl_path=os.path.join(args.save_dir, "case_bank.jsonl"),
-        device="cuda"  
+        device=args.device  
     )
 
     # --- Cấu hình training ---
@@ -128,6 +131,7 @@ def main():
         'rae_top_k': 10,
         'use_failure_memory': args.use_failure_memory,
         'failure_memory_top_k': 3,
+        'device': args.device,
     }
 
     # --- Tạo DataProcessor ---
