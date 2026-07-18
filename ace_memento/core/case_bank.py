@@ -22,6 +22,10 @@ except ImportError:
     print("Warning: sentence-transformers not available. Non-parametric retrieval will use keyword overlap.")
 
 
+# Global registry for shared embedding models to avoid redundant loads and save RAM/VRAM
+_SHARED_MODELS = {}
+
+
 # --- Helpers for formatting plans ---
 def _parse_plan(plan_field: Union[str, dict, list, None]) -> Optional[Union[dict, list]]:
     if plan_field is None:
@@ -109,7 +113,7 @@ class CaseBank:
         embedding_model_name: str = "BAAI/bge-m3",
         parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
         retriever_model_path: Optional[str] = None,
-        device: str = "cpu",
+        device: str = "cpu"
     ):
         self.memory_jsonl_path = memory_jsonl_path
         self.top_k = top_k
@@ -117,7 +121,6 @@ class CaseBank:
         self.parametric_model_name = parametric_model_name
         self.retriever_model_path = retriever_model_path
         self.device = device if device != "auto" else ("cuda" if TORCH_AVAILABLE and torch.cuda.is_available() else "cpu")
-        #self.device = "cpu"
         self.cases: List[Dict[str, Any]] = []
 
         # Lazy loaded components
@@ -166,7 +169,7 @@ class CaseBank:
             with open(self.memory_jsonl_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(case_entry, ensure_ascii=False) + "\n")
             print(f"[CaseBank] Case saved successfully (reward={reward})")
-            self._rebuild_embeddings()
+            self._append_embedding(question)
         except Exception as e:
             print(f"[CaseBank] Error writing case: {e}")
 
@@ -191,10 +194,35 @@ class CaseBank:
     def _load_emb_model(self) -> None:
         if self._emb_model is None and EMBEDDING_AVAILABLE:
             try:
-                print(f"[CaseBank] Loading embedding model: {self.embedding_model_name}")
-                self._emb_model = SentenceTransformer(self.embedding_model_name, device=self.device)
+                key = (self.embedding_model_name, self.device)
+                if key not in _SHARED_MODELS:
+                    print(f"[CaseBank] Loading shared model: {self.embedding_model_name} on {self.device}")
+                    _SHARED_MODELS[key] = SentenceTransformer(self.embedding_model_name, device=self.device)
+                self._emb_model = _SHARED_MODELS[key]
             except Exception as e:
                 print(f"[CaseBank] Error loading embedding model: {e}")
+
+    def _append_embedding(self, question: str) -> None:
+        if not EMBEDDING_AVAILABLE or self.retriever_model_path:
+            return
+        self._load_emb_model()
+        if self._emb_model is None:
+            return
+        try:
+            new_emb = self._emb_model.encode(
+                [question],
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                show_progress_bar=False
+            )
+            if self._embeddings is None or len(self._embeddings) == 0:
+                self._embeddings = new_emb
+            else:
+                self._embeddings = np.vstack([self._embeddings, new_emb])
+        except Exception as e:
+            print(f"[CaseBank] Error encoding single case: {e}")
+            # Fall back to rebuilding if anything goes wrong
+            self._rebuild_embeddings()
 
     def _rebuild_embeddings(self) -> None:
         if not EMBEDDING_AVAILABLE or not self.cases or self.retriever_model_path:
