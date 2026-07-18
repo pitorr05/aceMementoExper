@@ -66,21 +66,91 @@ def strip_fences(text: str) -> str:
     return m.group(0) if m else text
 
 def extract_json_from_text(text: str, key_to_find: str = None) -> Optional[Any]:
-    text = strip_fences(text)
+    text = text.strip()
+    
+    # 1. Try parsing the whole text directly
     try:
-        data = json.loads(text)
-        if key_to_find:
-            return data.get(key_to_find)
-        return data
+        cleaned_text = text
+        if cleaned_text.startswith("```"):
+            cleaned_text = re.sub(r"^```[^\n]*\n", "", cleaned_text)
+            cleaned_text = re.sub(r"\n?```$", "", cleaned_text)
+            cleaned_text = cleaned_text.strip()
+        data = json.loads(cleaned_text)
+        if isinstance(data, dict):
+            if key_to_find:
+                return data.get(key_to_find)
+            return data
     except Exception:
-        # Fallback regex search for JSON block
-        try:
-            matches = re.findall(r'({[\s\S]*})', text)
+        pass
+
+    # 2. Extract valid JSON blocks by brace counting
+    stack = []
+    start_idx = -1
+    parsed_dicts = []
+    for idx, char in enumerate(text):
+        if char == '{':
+            if not stack:
+                start_idx = idx
+            stack.append(char)
+        elif char == '}':
+            if stack:
+                stack.pop()
+                if not stack:
+                    candidate = text[start_idx:idx+1]
+                    try:
+                        parsed = json.loads(candidate)
+                        if isinstance(parsed, dict):
+                            parsed_dicts.append(parsed)
+                    except Exception:
+                        pass
+
+    if parsed_dicts:
+        # Find the last dictionary that actually has a non-placeholder final_answer if possible, or just the last dict
+        target_dict = parsed_dicts[-1]
+        for d in reversed(parsed_dicts):
+            fa = d.get("final_answer")
+            if fa and not (isinstance(fa, str) and (fa.startswith("[") or "concise" in fa.lower() or "final answer" in fa.lower())):
+                target_dict = d
+                break
+        
+        if key_to_find:
+            return target_dict.get(key_to_find)
+        return target_dict
+
+    # 3. Fallback regex extraction for fields if no JSON was parsed
+    if key_to_find:
+        # Try to find the key using regex
+        patterns = [
+            rf'"{key_to_find}"\s*:\s*"([^"]*)"',
+            rf"'{key_to_find}'\s*:\s*'([^']*)'",
+            rf'"{key_to_find}"\s*:\s*([^\s,}}]+)',
+            rf"'{key_to_find}'\s*:\s*([^\s,}}]+)"
+        ]
+        for pattern in patterns:
+            matches = re.findall(pattern, text)
             if matches:
-                data = json.loads(matches[-1])
-                if key_to_find:
-                    return data.get(key_to_find)
-                return data
-        except Exception:
-            pass
+                # filter out placeholder values
+                valid_matches = [m for m in matches if not (isinstance(m, str) and (m.startswith("[") or "concise" in m.lower() or "final answer" in m.lower()))]
+                if valid_matches:
+                    return valid_matches[-1]
+                return matches[-1]
+                
+    # If no key is specified, we can construct a dummy dict using regexes for final_answer and bullet_ids
+    else:
+        fa = None
+        for pattern in [r'"final_answer"\s*:\s*"([^"]*)"', r"'final_answer'\s*:\s*'([^']*)'", r'"final_answer"\s*:\s*([^\s,}]+)', r"'final_answer'\s*:\s*([^\s,}]+)"]:
+            matches = re.findall(pattern, text)
+            if matches:
+                valid_matches = [m for m in matches if not (isinstance(m, str) and (m.startswith("[") or "concise" in m.lower() or "final answer" in m.lower()))]
+                fa = valid_matches[-1] if valid_matches else matches[-1]
+                break
+                
+        bids = []
+        bids_matches = re.findall(r'\[?([a-z]{3,}-\d{5})\]?', text)
+        if bids_matches:
+            bids = list(set(bids_matches))
+            
+        if fa is not None:
+            return {"final_answer": fa, "bullet_ids": bids}
+
     return None
