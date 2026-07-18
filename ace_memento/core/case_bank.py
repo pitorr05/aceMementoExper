@@ -117,7 +117,7 @@ class CaseBank:
         self.parametric_model_name = parametric_model_name
         self.retriever_model_path = retriever_model_path
         self.device = device if device != "auto" else ("cuda" if TORCH_AVAILABLE and torch.cuda.is_available() else "cpu")
-        self.device = "cpu"
+        #self.device = "cpu"
         self.cases: List[Dict[str, Any]] = []
 
         # Lazy loaded components
