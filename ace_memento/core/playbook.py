@@ -94,8 +94,14 @@ class PlaybookManager:
     def _load_model(self) -> None:
         if self._model is None and EMBEDDING_AVAILABLE:
             try:
-                self._model = SentenceTransformer(self.embedding_model_name, device=self.device)
-            except Exception:
+                from .case_bank import _SHARED_MODELS
+                key = (self.embedding_model_name, self.device)
+                if key not in _SHARED_MODELS:
+                    print(f"[PlaybookManager] Loading shared model: {self.embedding_model_name} on {self.device}")
+                    _SHARED_MODELS[key] = SentenceTransformer(self.embedding_model_name, device=self.device)
+                self._model = _SHARED_MODELS[key]
+            except Exception as e:
+                print(f"Warning: Failed to load shared embedding model: {e}")
                 self._model = None
 
     def update_playbook(self, new_playbook: str) -> None:
