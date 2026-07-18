@@ -398,6 +398,13 @@ class ACE:
             print(f"\n{'='*60}")
             print(f"RUNNING TEST")
             print(f"{'='*60}\n")
+            import time
+            from utils import VRAMMonitor
+            
+            vram_monitor = VRAMMonitor()
+            vram_monitor.start()
+            
+            eval_start_time = time.time()
             test_results = self._run_test(
                 test_samples=test_samples,
                 data_processor=data_processor,
@@ -408,6 +415,26 @@ class ACE:
                 prefix="test"
             )
             results['test_results'] = test_results
+            
+            eval_end_time = time.time()
+            total_eval_time = eval_end_time - eval_start_time
+            avg_run_time = total_eval_time / len(test_samples) if test_samples else 0.0
+            
+            # Stop VRAM monitor and get metrics
+            vram_monitor.stop()
+            avg_vram, gpu_averages = vram_monitor.get_average_vram()
+            results["avg_vram_mb"] = avg_vram
+            results["gpu_averages_mb"] = gpu_averages
+
+            # Calculate LLM speeds
+            llm_stats = calculate_llm_statistics(log_dir)
+            
+            results["total_running_time"] = total_eval_time
+            results["avg_running_time_per_sample"] = avg_run_time
+            results["llm_statistics"] = llm_stats
+            
+            # Print statistics
+            print_eval_statistics_banner(total_eval_time, avg_run_time, llm_stats, avg_vram=avg_vram, gpu_averages=gpu_averages)
         
         # Save consolidated results
         final_results_path = os.path.join(save_path, "final_results.json")
@@ -1417,4 +1444,4 @@ class ACE:
             "accuracy": final_test_accuracy,
             "correct": correct_count_sample_based,
             "total": total_count,
-        } 
+        }
