@@ -141,8 +141,7 @@ class CaseBank:
                 beta1=0.9,
                 beta2=0.999,
             )
-            # Load existing cases into ARW
-            self._load_arw_cases()
+            # NOTE: ARW cases are loaded inside load_cases() below — no separate call needed
 
         # Lazy loaded components
         self._emb_model = None
@@ -152,20 +151,10 @@ class CaseBank:
         self._para_tokenizer = None
         self._para_model = None
 
-        # Load cases from JSONL
+        # Load cases from JSONL (also loads into ARW if enabled)
         self.load_cases()
         self._init_parametric_retriever()
 
-    def _load_arw_cases(self) -> None:
-        """Load existing cases into ARW retriever."""
-        if self.arw_retriever is None:
-            return
-        try:
-            # Try to load from the existing memory file
-            if os.path.exists(self.memory_jsonl_path):
-                self.arw_retriever.load_cases(self.memory_jsonl_path)
-        except Exception as e:
-            print(f"[CaseBank] Error loading ARW cases: {e}")
 
     def load_cases(self) -> None:
         self.cases = []
@@ -224,23 +213,29 @@ class CaseBank:
         if self.use_arw and self.arw_retriever:
             self.arw_retriever.update_weights(scores, reward)
 
-    def get_arw_scores(self, query: str) -> Optional[List[float]]:
-        """Get scores from each ARW retriever for a query."""
+    def get_arw_scores(self, query: str, retrieved_cases: Optional[List[Dict[str, Any]]] = None) -> Optional[List[float]]:
+        """Get scores from each ARW retriever for a query, averaged over retrieved cases if provided."""
         if not self.use_arw or self.arw_retriever is None:
             return None
         
         try:
-            # Get scores from each retriever
-            bm25_scores = self.arw_retriever._get_bm25_scores(query)
-            semantic_scores = self.arw_retriever._get_semantic_scores(query)
-            temporal_scores = self.arw_retriever._get_temporal_scores(query)
-            memento_scores = self.arw_retriever._get_memento_scores(query)
-            
-            # Average scores across all cases
-            avg_bm25 = float(np.mean(bm25_scores)) if len(bm25_scores) > 0 else 0.0
-            avg_semantic = float(np.mean(semantic_scores)) if len(semantic_scores) > 0 else 0.0
-            avg_temporal = float(np.mean(temporal_scores)) if len(temporal_scores) > 0 else 0.0
-            avg_memento = float(np.mean(memento_scores)) if len(memento_scores) > 0 else 0.0
+            if retrieved_cases and len(retrieved_cases) > 0:
+                avg_bm25 = float(np.mean([c.get("bm25_score", 0.0) for c in retrieved_cases]))
+                avg_semantic = float(np.mean([c.get("semantic_score", 0.0) for c in retrieved_cases]))
+                avg_temporal = float(np.mean([c.get("temporal_score", 0.0) for c in retrieved_cases]))
+                avg_memento = float(np.mean([c.get("memento_score", 0.0) for c in retrieved_cases]))
+            else:
+                # Fallback: Get scores from each retriever across all cases
+                bm25_scores = self.arw_retriever._get_bm25_scores(query)
+                semantic_scores = self.arw_retriever._get_semantic_scores(query)
+                temporal_scores = self.arw_retriever._get_temporal_scores(query)
+                memento_scores = self.arw_retriever._get_memento_scores(query)
+                
+                # Average scores across all cases
+                avg_bm25 = float(np.mean(bm25_scores)) if len(bm25_scores) > 0 else 0.0
+                avg_semantic = float(np.mean(semantic_scores)) if len(semantic_scores) > 0 else 0.0
+                avg_temporal = float(np.mean(temporal_scores)) if len(temporal_scores) > 0 else 0.0
+                avg_memento = float(np.mean(memento_scores)) if len(memento_scores) > 0 else 0.0
             
             return [avg_bm25, avg_semantic, avg_temporal, avg_memento]
         except Exception as e:

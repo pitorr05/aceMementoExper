@@ -374,9 +374,11 @@ class ACEMementoRunner:
                     print(f"Predicted answer: {final_answer} | Target: {target} | Correct: {is_correct}")
                     if self.case_bank.use_arw and self.case_bank.arw_retriever is not None:
                         try:
-                            scores = self.case_bank.get_arw_scores(query)
+                            scores = self.case_bank.get_arw_scores(query, retrieved_cases)
                             if scores is not None:
                                 self.case_bank.update_arw_weights(query, scores, reward)
+                                weights = self.case_bank.arw_retriever.weights
+                                print(f"[ARW] Weights: BM25={weights[0]:.3f}, Semantic={weights[1]:.3f}, Temporal={weights[2]:.3f}, Memento={weights[3]:.3f}")
                         except Exception as e: 
                             print(f"[ARW] Update failed: {e}")
                     # 4. Write case to episodic memory (Memento CASE WRITE)
@@ -662,7 +664,7 @@ class ACEMementoRunner:
                     print(f"Predicted: {final_answer} | Target: {target} | Correct: {is_correct}")
                     if self.case_bank.use_arw and self.case_bank.arw_retriever is not None:
                         try:
-                            scores = self.case_bank.get_arw_scores(query)
+                            scores = self.case_bank.get_arw_scores(query, retrieved_cases)
                             if scores is not None:
                                 self.case_bank.update_arw_weights(query, scores, reward)
                                 weights = self.case_bank.arw_retriever.weights

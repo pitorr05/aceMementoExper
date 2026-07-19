@@ -41,6 +41,7 @@ class ARWRetriever:
         
         # ARW state: 4 retrievers
         self.num_retrievers = 4
+        self.logits = np.zeros(self.num_retrievers)
         self.weights = np.ones(self.num_retrievers) / self.num_retrievers
         self.m = np.zeros(self.num_retrievers)  # Momentum
         self.v = np.zeros(self.num_retrievers)  # Variance
@@ -64,8 +65,8 @@ class ARWRetriever:
             try:
                 from sentence_transformers import SentenceTransformer
                 self._embedding_model = SentenceTransformer(
-                    self.embedding_model_name, 
-                    device=self.device
+                     self.embedding_model_name, 
+                     device=self.device
                 )
             except Exception as e:
                 print(f"[ARW] Error loading embedding model: {e}")
@@ -129,15 +130,18 @@ class ARWRetriever:
             return np.zeros(len(self.cases))
             
     def _get_temporal_scores(self, query: str) -> np.ndarray:
-        """Get temporal scores (recency weighting)."""
+        """Get temporal scores (recency weighting) using rank-based recency."""
         if not self._case_timestamps or not self.cases:
             return np.ones(len(self.cases))
         try:
-            # Simple recency: newer cases get higher scores
-            max_time = max(self._case_timestamps)
-            if max_time == 0:
-                return np.ones(len(self.cases))
-            scores = np.array([t / max_time for t in self._case_timestamps])
+            timestamps = np.array(self._case_timestamps)
+            # Count how many timestamps are strictly less than each timestamp
+            counts = np.array([np.sum(timestamps < t) for t in timestamps], dtype=float)
+            max_val = np.max(counts)
+            if max_val > 0:
+                scores = counts / max_val
+            else:
+                scores = np.ones(len(self.cases))
             return scores
         except Exception:
             return np.ones(len(self.cases))
@@ -163,19 +167,26 @@ class ARWRetriever:
         reward: 1 if correct, 0 if incorrect
         """
         self.t += 1
-        g = reward * np.array(scores)
         
-        # Adam update
+        # Scale reward to {-1, 1} for positive/negative reinforcement
+        scaled_reward = 2 * reward - 1
+        
+        # Subtract mean score as a baseline to differentiate positive/negative contributions
+        scores_arr = np.array(scores)
+        mean_score = np.mean(scores_arr) if len(scores_arr) > 0 else 0.0
+        g = scaled_reward * (scores_arr - mean_score)
+        
+        # Adam update on logits
         self.m = self.beta1 * self.m + (1 - self.beta1) * g
         self.v = self.beta2 * self.v + (1 - self.beta2) * g**2
         
         m_hat = self.m / (1 - self.beta1**self.t)
         v_hat = self.v / (1 - self.beta2**self.t)
         
-        self.weights += self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
+        self.logits += self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
         
-        # Softmax normalization
-        exp_w = np.exp(self.weights - np.max(self.weights))
+        # Softmax normalization to update weights
+        exp_w = np.exp(self.logits - np.max(self.logits))
         self.weights = exp_w / exp_w.sum()
         
     def retrieve(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
