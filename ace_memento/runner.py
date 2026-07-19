@@ -131,7 +131,9 @@ class ACEMementoRunner:
             top_k=case_bank_top_k,
             parametric_model_name=parametric_model_name,
             retriever_model_path=retriever_model_path,
-            device=device
+            device=device,
+            use_arw=True,
+            arw_top_k=case_bank_top_k,
         )
 
         # 3. Core agents
@@ -369,7 +371,13 @@ class ACEMementoRunner:
                     is_correct = data_processor.answer_is_correct(final_answer, target)
                     reward = 1 if is_correct else 0
                     print(f"Predicted answer: {final_answer} | Target: {target} | Correct: {is_correct}")
-
+                    if self.case_bank.use_arw and self.case_bank.arw_retriever is not None:
+                        try:
+                            scores = self.case_bank.get_arw_scores(query)
+                            if scores is not None:
+                                self.case_bank.update_arw_weights(query, scores, reward)
+                        except Exception as e: 
+                            print(f"[ARW] Update failed: {e}")
                     # 4. Write case to episodic memory (Memento CASE WRITE)
                     self.case_bank.add_case(query, trajectory["plan_json"], reward)
 
@@ -651,7 +659,13 @@ class ACEMementoRunner:
                     is_correct = data_processor.answer_is_correct(final_answer, target)
                     reward = 1 if is_correct else 0
                     print(f"Predicted: {final_answer} | Target: {target} | Correct: {is_correct}")
-
+                    if self.case_bank.use_arw and self.case_bank.arw_retriever is not None:
+                        try:
+                            scores = self.case_bank.get_arw_scores(query)
+                            if scores is not None:
+                                self.case_bank.update_arw_weights(query, scores, reward)
+                        except Exception as e:
+                            print(f"[ARW] Update failed: {e}")
                     self.case_bank.add_case(query, trajectory["plan_json"], reward)
 
                     trajectory_str = json.dumps(trajectory, indent=2)

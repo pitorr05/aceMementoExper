@@ -47,6 +47,8 @@ def parse_args():
     parser.add_argument("--device", type=str, default="cuda",
                         choices=["cuda", "cpu"],
                         help="Device to use: cuda or cpu")
+    parser.add_argument("--use_arw", action="store_true", default=False,
+                    help="Enable Adaptive Retriever Weighting (ARW) for CaseBank")
     return parser.parse_args()
 
 
@@ -108,6 +110,7 @@ def main():
         use_failure_memory=args.use_failure_memory,
         failure_memory_top_k=3,
         memory_jsonl_path=os.path.join(args.save_dir, "case_bank.jsonl"),
+        use_arw=args.use_arw,
         device=args.device  
     )
 

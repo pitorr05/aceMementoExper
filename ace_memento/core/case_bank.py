@@ -2,6 +2,7 @@ import os
 import json
 import numpy as np
 from typing import List, Dict, Tuple, Any, Optional, Union
+from .arw_retriever import ARWRetriever
 
 # Try to import torch and transformers for parametric memory
 try:
@@ -104,6 +105,7 @@ class CaseBank:
     Supports both:
       - Non-parametric retrieval (SentenceTransformer/Faiss cosine similarity)
       - Parametric retrieval (MemoryRetrieverClassifier neural model)
+      - Adaptive Retriever Weighting (ARW) for hybrid retrieval
     """
 
     def __init__(
@@ -113,7 +115,9 @@ class CaseBank:
         embedding_model_name: str = "BAAI/bge-m3",
         parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
         retriever_model_path: Optional[str] = None,
-        device: str = "cpu"
+        device: str = "cpu",
+        use_arw: bool = False,  # 👈 THÊM FLAG NÀY
+        arw_top_k: Optional[int] = None,
     ):
         self.memory_jsonl_path = memory_jsonl_path
         self.top_k = top_k
@@ -122,6 +126,23 @@ class CaseBank:
         self.retriever_model_path = retriever_model_path
         self.device = device if device != "auto" else ("cuda" if TORCH_AVAILABLE and torch.cuda.is_available() else "cpu")
         self.cases: List[Dict[str, Any]] = []
+        
+        # 👇 ARW INTEGRATION
+        self.use_arw = use_arw
+        self.arw_retriever = None
+        
+        if use_arw:
+            print(f"[CaseBank] Initializing ARW Retriever (top_k={arw_top_k or top_k}, device={device})")
+            self.arw_retriever = ARWRetriever(
+                embedding_model_name=embedding_model_name,
+                top_k=arw_top_k or top_k,
+                device=device,
+                learning_rate=1e-4,
+                beta1=0.9,
+                beta2=0.999,
+            )
+            # Load existing cases into ARW
+            self._load_arw_cases()
 
         # Lazy loaded components
         self._emb_model = None
@@ -134,6 +155,17 @@ class CaseBank:
         # Load cases from JSONL
         self.load_cases()
         self._init_parametric_retriever()
+
+    def _load_arw_cases(self) -> None:
+        """Load existing cases into ARW retriever."""
+        if self.arw_retriever is None:
+            return
+        try:
+            # Try to load from the existing memory file
+            if os.path.exists(self.memory_jsonl_path):
+                self.arw_retriever.load_cases(self.memory_jsonl_path)
+        except Exception as e:
+            print(f"[CaseBank] Error loading ARW cases: {e}")
 
     def load_cases(self) -> None:
         self.cases = []
@@ -152,6 +184,9 @@ class CaseBank:
                         pass
             print(f"[CaseBank] Loaded {len(self.cases)} cases from {self.memory_jsonl_path}")
             self._rebuild_embeddings()
+            # If ARW is enabled, reload cases
+            if self.use_arw and self.arw_retriever:
+                self.arw_retriever.load_cases(self.memory_jsonl_path)
         except Exception as e:
             print(f"[CaseBank] Error loading cases: {e}")
 
@@ -170,8 +205,47 @@ class CaseBank:
                 f.write(json.dumps(case_entry, ensure_ascii=False) + "\n")
             print(f"[CaseBank] Case saved successfully (reward={reward})")
             self._append_embedding(question)
+            
+            # 👇 ADD TO ARW IF ENABLED
+            if self.use_arw and self.arw_retriever:
+                self.arw_retriever.add_case(question, plan, reward)
         except Exception as e:
             print(f"[CaseBank] Error writing case: {e}")
+
+    def update_arw_weights(self, query: str, scores: List[float], reward: int) -> None:
+        """
+        Update ARW weights based on retrieval feedback.
+        
+        Args:
+            query: The query string
+            scores: List of scores from each retriever [BM25, Semantic, Temporal, Memento]
+            reward: 1 if correct, 0 if incorrect
+        """
+        if self.use_arw and self.arw_retriever:
+            self.arw_retriever.update_weights(scores, reward)
+
+    def get_arw_scores(self, query: str) -> Optional[List[float]]:
+        """Get scores from each ARW retriever for a query."""
+        if not self.use_arw or self.arw_retriever is None:
+            return None
+        
+        try:
+            # Get scores from each retriever
+            bm25_scores = self.arw_retriever._get_bm25_scores(query)
+            semantic_scores = self.arw_retriever._get_semantic_scores(query)
+            temporal_scores = self.arw_retriever._get_temporal_scores(query)
+            memento_scores = self.arw_retriever._get_memento_scores(query)
+            
+            # Average scores across all cases
+            avg_bm25 = float(np.mean(bm25_scores)) if len(bm25_scores) > 0 else 0.0
+            avg_semantic = float(np.mean(semantic_scores)) if len(semantic_scores) > 0 else 0.0
+            avg_temporal = float(np.mean(temporal_scores)) if len(temporal_scores) > 0 else 0.0
+            avg_memento = float(np.mean(memento_scores)) if len(memento_scores) > 0 else 0.0
+            
+            return [avg_bm25, avg_semantic, avg_temporal, avg_memento]
+        except Exception as e:
+            print(f"[CaseBank] Error getting ARW scores: {e}")
+            return None
 
     def _init_parametric_retriever(self) -> None:
         """Initialize neural parametric classifier retriever if check-point is provided."""
@@ -262,8 +336,21 @@ class CaseBank:
         return probs
 
     def retrieve_cases(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Retrieve Top-K relevant cases for the query."""
+        """
+        Retrieve Top-K relevant cases for the query.
+        If ARW is enabled, uses ARW hybrid retrieval.
+        Otherwise, falls back to original retrieval methods.
+        """
         k = top_k if top_k is not None else self.top_k
+        
+        # 👇 ARW RETRIEVAL
+        if self.use_arw and self.arw_retriever is not None:
+            try:
+                return self.arw_retriever.retrieve(query, k)
+            except Exception as e:
+                print(f"[CaseBank] ARW retrieval failed, falling back to original: {e}")
+                # Fall through to original retrieval
+
         if not self.cases:
             return []
 
