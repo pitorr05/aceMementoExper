@@ -93,7 +93,8 @@ class ACEMementoRunner:
         server_scripts: Optional[List[str]] = None,
         device: str = "cpu",
         parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
-        retriever_model_path: Optional[str] = None
+        retriever_model_path: Optional[str] = None,
+    use_arw: bool = False,
     ):
         self.api_provider = api_provider
         self.generator_model = generator_model
@@ -132,7 +133,7 @@ class ACEMementoRunner:
             parametric_model_name=parametric_model_name,
             retriever_model_path=retriever_model_path,
             device=device,
-            use_arw=True,
+            use_arw=use_arw,
             arw_top_k=case_bank_top_k,
         )
 
@@ -664,6 +665,8 @@ class ACEMementoRunner:
                             scores = self.case_bank.get_arw_scores(query)
                             if scores is not None:
                                 self.case_bank.update_arw_weights(query, scores, reward)
+                                weights = self.case_bank.arw_retriever.weights
+                                print(f"[ARW] Weights: BM25={weights[0]:.3f}, Semantic={weights[1]:.3f}, Temporal={weights[2]:.3f}, Memento={weights[3]:.3f}")
                         except Exception as e:
                             print(f"[ARW] Update failed: {e}")
                     self.case_bank.add_case(query, trajectory["plan_json"], reward)
