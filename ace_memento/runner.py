@@ -91,7 +91,7 @@ class ACEMementoRunner:
         adversarial_frequency: int = 10,
         adversarial_model: Optional[str] = None,
         server_scripts: Optional[List[str]] = None,
-        device: str = "cuda",
+        device: str = "cpu",
         parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
         retriever_model_path: Optional[str] = None
     ):
@@ -105,6 +105,16 @@ class ACEMementoRunner:
         self.case_bank_top_k = case_bank_top_k
         self.parametric_model_name = parametric_model_name
         self.retriever_model_path = retriever_model_path
+
+        # Auto-detect device if default 'cpu' is requested but cuda is available
+        if device == "cpu":
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    device = "cuda"
+                    print("[ACEMementoRunner] Dynamic device selection: Upgraded device to 'cuda' (GPU detected)")
+            except ImportError:
+                pass
 
         # Initialize clients
         generator_client, reflector_client, curator_client = initialize_clients(api_provider)
@@ -776,35 +786,56 @@ class ACEMementoRunner:
 
         elif mode == "eval_only":
             print(f"--- Starting Evaluation on {len(test_samples or [])} samples ---")
-            answers = []
-            targets = []
-            for step, sample in enumerate(test_samples or [], 1):
-                query = sample.get("question", "")
-                context = sample.get("context", "")
-                target = sample.get("target", "")
+            import time
+            from utils import calculate_llm_statistics, print_eval_statistics_banner, VRAMMonitor
+            
+            vram_monitor = VRAMMonitor()
+            vram_monitor.start()
+                
+            eval_start_time = time.time()
+            
+            test_res = await self._run_test(
+                test_samples=test_samples,
+                data_processor=data_processor,
+                playbook=self.playbook_manager.playbook,
+                config=config,
+                log_dir=log_dir,
+                prefix="test"
+            )
+            
+            eval_end_time = time.time()
+            total_eval_time = eval_end_time - eval_start_time
+            avg_run_time = total_eval_time / len(test_samples) if test_samples else 0.0
 
-                retrieved_cases = self.case_bank.retrieve_cases(query)
-                cases_text = self.case_bank.format_cases_for_prompt(retrieved_cases)
-                playbook = self.playbook_manager.retrieve_bullets(query, self.rae_top_k) if self.use_rae else self.playbook_manager.playbook
+            # Stop VRAM monitor and get metrics
+            avg_vram = None
+            gpu_averages = None
+            if vram_monitor:
+                vram_monitor.stop()
+                avg_vram, gpu_averages = vram_monitor.get_average_vram()
+                results["avg_vram_mb"] = avg_vram
+                results["gpu_averages_mb"] = gpu_averages
 
-                final_answer, _, _ = await self.generator.generate(
-                    question=query,
-                    playbook=playbook,
-                    cases_text=cases_text,
-                    context=context,
-                    use_json_mode=config.get("json_mode", False),
-                    call_id=f"eval_s{step}",
-                    log_dir=log_dir
-                )
-
-                is_correct = data_processor.answer_is_correct(final_answer, target)
-                answers.append(final_answer)
-                targets.append(target)
-                print(f"Eval {step}: Pred={final_answer} | Target={target} | Correct={is_correct}")
-
-            accuracy = data_processor.evaluate_accuracy(answers, targets) if test_samples else 0.0
-            print(f"Evaluation Accuracy: {accuracy:.4f}")
-            results["accuracy"] = accuracy
+            results["test_results"] = test_res
+            
+            # Calculate LLM speeds
+            llm_stats = calculate_llm_statistics(log_dir)
+            
+            results["total_running_time"] = total_eval_time
+            results["avg_running_time_per_sample"] = avg_run_time
+            results["llm_statistics"] = llm_stats
+            
+            # Print statistics
+            print_eval_statistics_banner(total_eval_time, avg_run_time, llm_stats, avg_vram=avg_vram, gpu_averages=gpu_averages)
+            
+            # Print final summary banner matching standard ACE format
+            print(f"\n{'='*60}")
+            print(f"RUN COMPLETE")
+            print(f"{'='*60}")
+            print(f"Mode: {mode.upper()}")
+            print(f"Test Accuracy: {test_res['accuracy']:.3f} ({test_res['correct']}/{test_res['total']} samples correct)")
+            print(f"Results saved to: {run_path}")
+            print(f"{'='*60}\n")
 
         # Save consolidated results
         final_results_path = os.path.join(run_path, "final_results.json")
@@ -1061,5 +1092,3 @@ class ACEMementoRunner:
             "attack_rationale": attack_rationale,
             "vulnerability_hint": vulnerability_hint,
         }
-
-
