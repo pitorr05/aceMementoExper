@@ -1,0 +1,7 @@
+.venv/
+.env.example
+.env
+__pycache__/
+*/__pycache__/
+results/
+results_*/ 

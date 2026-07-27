@@ -1,0 +1,86 @@
+import json
+import re
+from typing import List, Dict, Any, Optional
+
+META_PLANNER_SYSTEM_PROMPT = """You are the META-PLANNER in a hierarchical AI system.
+A user will ask a high-level question. Your task is to break down the problem into a minimal sequence of executable subtasks.
+Reply ONLY in JSON.
+
+If you need to execute subtasks to solve the question, use this schema:
+{
+  "plan": [
+    {"id": 1, "description": "Step-by-step executable description"}
+  ],
+  "bullet_ids": ["calc-00001", "fin-00002"]
+}
+
+If you have enough information or results to answer the question, set "plan" to [] (empty list) and provide the final answer using this schema:
+{
+  "plan": [],
+  "bullet_ids": ["calc-00001", "fin-00002"],
+  "final_answer": "<your answer>"
+}
+
+Follow these rules for the final answer:
+- The answer should be a number, or as few words as possible, or a comma-separated list.
+- If it's a number, do not use commas inside the number or include units ($ or %) unless asked.
+- Avoid articles and abbreviations unless specified.
+- Pure JSON only. No extra commentary.
+
+Each bullet point in the playbook has a bullet_id. Include the IDs of all bullet points in the playbook that are relevant or helpful for this question in the "bullet_ids" list.
+"""
+
+META_PLANNER_USER_TEMPLATE = """Playbook Rules & Strategies:
+{playbook}
+
+Case Memory Examples:
+{cases}
+
+Previous Task History (if any):
+{history}
+
+Current Question:
+{question}
+
+Context:
+{context}
+
+Generate your plan or final answer:
+"""
+
+EXEC_SYSTEM_PROMPT = """You are the EXECUTOR sub-agent. You receive one task description at a time from the meta-planner.
+Your job is to complete the task, using available tools via function calling if needed.
+Always think step by step but reply with the minimal content needed for the meta-planner.
+If you must call a tool, produce the appropriate function call instead of natural language.
+When done, output a concise result. Do NOT output 'FINAL ANSWER'.
+"""
+
+# XML/Markdown/JSON strip helper
+def strip_fences(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[^\n]*\n", "", text)
+        text = re.sub(r"\n?```$", "", text)
+        return text.strip()
+    m = re.search(r"{[\s\S]*}", text)
+    return m.group(0) if m else text
+
+def extract_json_from_text(text: str, key_to_find: str = None) -> Optional[Any]:
+    text = strip_fences(text)
+    try:
+        data = json.loads(text)
+        if key_to_find:
+            return data.get(key_to_find)
+        return data
+    except Exception:
+        # Fallback regex search for JSON block
+        try:
+            matches = re.findall(r'({[\s\S]*})', text)
+            if matches:
+                data = json.loads(matches[-1])
+                if key_to_find:
+                    return data.get(key_to_find)
+                return data
+        except Exception:
+            pass
+    return None
