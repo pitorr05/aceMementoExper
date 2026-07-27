@@ -93,10 +93,22 @@ class Generator:
             if data:
                 final_answer = str(data.get("final_answer", "")).strip()
                 bullet_ids_used = data.get("bullet_ids", [])
+            
+            # Fallback if final_answer is missing, placeholder, or empty
+            if not final_answer or final_answer == "No final answer found" or final_answer.startswith("["):
+                from utils import extract_answer
+                extracted = extract_answer(response_text)
+                if extracted and extracted != "No final answer found":
+                    final_answer = extracted.strip()
+                else:
+                    final_answer = response_text.strip()
+        except Exception:
+            from utils import extract_answer
+            extracted = extract_answer(response_text)
+            if extracted and extracted != "No final answer found":
+                final_answer = extracted.strip()
             else:
                 final_answer = response_text.strip()
-        except Exception:
-            final_answer = response_text.strip()
 
         # Build trajectory trace matching the expected schema
         trajectory = {
