@@ -44,6 +44,10 @@ def parse_args():
                         help="Disable RAE")
     parser.add_argument("--no_failure_memory", action="store_false", dest="use_failure_memory",
                         help="Disable Failure Memory")
+    parser.add_argument("--similarity_weight", type=float, default=0.8,
+                    help="Weight for similarity in retrieval score")
+    parser.add_argument("--reward_weight", type=float, default=0.2,
+                    help="Weight for reward in retrieval score")
     parser.add_argument("--device", type=str, default="cuda",
                         choices=["cuda", "cpu"],
                         help="Device to use: cuda or cpu")
@@ -89,7 +93,7 @@ def main():
     # Fallback nếu thiếu val
     if not val_data and test_data:
         val_data = test_data[:len(test_data)//2]
-        print(f"  No val set found, using first half of test as val")
+        print(f" No val set found, using first half of test as val")
 
     print(f" Train: {len(train_data)} samples")
     print(f" Val: {len(val_data)} samples")
@@ -108,7 +112,9 @@ def main():
         use_failure_memory=args.use_failure_memory,
         failure_memory_top_k=3,
         memory_jsonl_path=os.path.join(args.save_dir, "case_bank.jsonl"),
-        device=args.device  
+        similarity_weight=args.similarity_weight,
+        reward_weight=args.reward_weight,
+        device=args.device,
     )
 
     # --- Cấu hình training ---

@@ -67,6 +67,8 @@ class ACE(ACEMementoRunner):
         device: str = "cpu",
         parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
         retriever_model_path: Optional[str] = None,
+        similarity_weight: float = 0.8,
+        reward_weight: float = 0.2,
     ):
         super().__init__(
             api_provider=api_provider,
@@ -87,6 +89,8 @@ class ACE(ACEMementoRunner):
             device=device,
             parametric_model_name=parametric_model_name,
             retriever_model_path=retriever_model_path,
+            similarity_weight=similarity_weight,
+            reward_weight=reward_weight,
         )
 
 

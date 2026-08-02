@@ -93,7 +93,9 @@ class ACEMementoRunner:
         server_scripts: Optional[List[str]] = None,
         device: str = "cpu",
         parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
-        retriever_model_path: Optional[str] = None
+        retriever_model_path: Optional[str] = None, 
+        similarity_weight: float = 0.8,
+        reward_weight: float = 0.2,
     ):
         self.api_provider = api_provider
         self.generator_model = generator_model
@@ -131,7 +133,9 @@ class ACEMementoRunner:
             top_k=case_bank_top_k,
             parametric_model_name=parametric_model_name,
             retriever_model_path=retriever_model_path,
-            device=device
+            device=device, 
+            similarity_weight=similarity_weight,
+            reward_weight=reward_weight,
         )
 
         # 3. Core agents
@@ -918,6 +922,7 @@ class ACEMementoRunner:
 
             retrieved_cases = self.case_bank.retrieve_cases(query)
             cases_text = self.case_bank.format_cases_for_prompt(retrieved_cases)
+            print(f"[CaseBank][TEST] sample={step}: retrieved {len(retrieved_cases)} case(s)")
             p = self.playbook_manager.retrieve_bullets(query, self.rae_top_k) if self.use_rae else playbook
 
             try:

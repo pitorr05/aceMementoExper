@@ -113,13 +113,17 @@ class CaseBank:
         embedding_model_name: str = "BAAI/bge-m3",
         parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
         retriever_model_path: Optional[str] = None,
-        device: str = "cpu"
+        device: str = "cpu",
+        similarity_weight: float = 0.8,
+        reward_weight: float = 0.2,
     ):
         self.memory_jsonl_path = memory_jsonl_path
         self.top_k = top_k
         self.embedding_model_name = embedding_model_name
         self.parametric_model_name = parametric_model_name
         self.retriever_model_path = retriever_model_path
+        self.similarity_weight = similarity_weight
+        self.reward_weight = reward_weight
         self.device = device if device != "auto" else ("cuda" if TORCH_AVAILABLE and torch.cuda.is_available() else "cpu")
         self.cases: List[Dict[str, Any]] = []
 
@@ -262,7 +266,7 @@ class CaseBank:
         return probs
 
     def retrieve_cases(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Retrieve Top-K relevant cases for the query."""
+        """Retrieve Top-K relevant cases với Reward-aware scoring."""
         k = top_k if top_k is not None else self.top_k
         if not self.cases:
             return []
@@ -274,9 +278,15 @@ class CaseBank:
                 probs = self._score_batch(query, icl_pool)
                 
                 results = []
-                for i, (case, score) in enumerate(zip(self.cases, probs)):
+                for i, (case, prob) in enumerate(zip(self.cases, probs)):
                     case_copy = case.copy()
-                    case_copy["score"] = score
+                    reward = case_copy.get("reward", 0)
+                    
+                    final_score = prob * (1 + self.reward_weight * reward)
+                    
+                    case_copy["base_score"] = prob
+                    case_copy["reward"] = reward
+                    case_copy["score"] = final_score
                     results.append(case_copy)
                 
                 results.sort(key=lambda x: x["score"], reverse=True)
@@ -301,9 +311,17 @@ class CaseBank:
                 retrieved = []
                 for idx in top_indices:
                     case = self.cases[idx].copy()
-                    case["similarity"] = float(similarities[idx])
-                    case["score"] = float(similarities[idx])
+                    similarity = float(similarities[idx])
+                    reward = case.get("reward", 0)
+                    
+                    final_score = similarity * (1 + self.reward_weight * reward)
+                    
+                    case["similarity"] = similarity
+                    case["reward"] = reward
+                    case["score"] = final_score
                     retrieved.append(case)
+                
+                retrieved.sort(key=lambda x: x["score"], reverse=True)
                 return retrieved
             except Exception as e:
                 print(f"[CaseBank] Error in non-parametric retrieval: {e}")
@@ -313,11 +331,16 @@ class CaseBank:
         query_words = set(query.lower().split())
         for idx, c in enumerate(self.cases):
             q_words = set(c["question"].lower().split())
-            overlap = len(query_words.intersection(q_words))
-            results.append((overlap, idx))
-        results.sort(key=lambda x: x[0], reverse=True)
-        ret_indices = [idx for score, idx in results[:k]]
-        return [self.cases[idx] for idx in ret_indices]
+            similarity = len(query_words.intersection(q_words))
+            reward = c.get("reward", 0)
+            final_score = similarity * (1 + self.reward_weight * reward)
+            case_copy = c.copy()
+            case_copy["base_score"] = similarity
+            case_copy["reward"] = reward
+            case_copy["score"] = final_score
+            results.append(case_copy)
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return results[:k]
 
     def format_cases_for_prompt(self, retrieved_cases: List[Dict[str, Any]], max_pos: int = 3, max_neg: int = 3) -> str:
         """Format retrieved positive and negative cases into a prompt block."""
