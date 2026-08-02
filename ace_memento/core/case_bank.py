@@ -267,8 +267,10 @@ class CaseBank:
 
     def retrieve_cases(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
         """Retrieve Top-K relevant cases với Reward-aware scoring."""
+        print(f"[CaseBank]  Retrieving cases for query: {query[:50]}...")
         k = top_k if top_k is not None else self.top_k
         if not self.cases:
+            print(f"[CaseBank] No cases in bank yet!")
             return []
 
         # 1. Use parametric neural model if available
@@ -290,6 +292,7 @@ class CaseBank:
                     results.append(case_copy)
                 
                 results.sort(key=lambda x: x["score"], reverse=True)
+                print(f"[CaseBank]  Retrieved {len(results)} cases")
                 return results[:k]
             except Exception as e:
                 print(f"[CaseBank] Error running parametric retrieval: {e}")
