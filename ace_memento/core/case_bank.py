@@ -325,6 +325,7 @@ class CaseBank:
                     retrieved.append(case)
                 
                 retrieved.sort(key=lambda x: x["score"], reverse=True)
+                print(f"[CaseBank]  Retrieved {len(retrieved)} cases (embedding)")
                 return retrieved
             except Exception as e:
                 print(f"[CaseBank] Error in non-parametric retrieval: {e}")
@@ -343,6 +344,7 @@ class CaseBank:
             case_copy["score"] = final_score
             results.append(case_copy)
         results.sort(key=lambda x: x["score"], reverse=True)
+        print(f"[CaseBank]  Retrieved {len(results)} cases (fallback)")
         return results[:k]
 
     def format_cases_for_prompt(self, retrieved_cases: List[Dict[str, Any]], max_pos: int = 3, max_neg: int = 3) -> str:
