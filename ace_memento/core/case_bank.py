@@ -395,7 +395,7 @@ class CaseBank:
             vector_weight,
             k
         )
-        
+        print(f"\n [CaseBank] Top {len(fused_results)} results for intent='{intent}':")
         # Format results
         final_cases = []
         for item in fused_results:
@@ -475,7 +475,12 @@ class CaseBank:
             # Sigmoid: 1 / (1 + exp(-k * (x - midpoint)))
             # k=1000 provides good spread, midpoint=0.009 centers on typical RRF range
             return 1.0 / (1.0 + math.exp(-1000 * (raw_score - 0.009)))
-        
+        print(f"   RRF fusion (BM25 weight={bm25_weight}, Vector weight={vector_weight}):")
+        for idx, raw_score in sorted_items[:limit]:
+            case = self.cases[idx]
+            norm_score = sigmoid_normalize(raw_score)
+            print(f"    Raw: {raw_score:.6f} → Normalized: {norm_score:.4f} | {case['question'][:40]}...")
+        print()
         final_results = []
         for idx, raw_score in sorted_items[:limit]:
             item = memory_map[idx]
