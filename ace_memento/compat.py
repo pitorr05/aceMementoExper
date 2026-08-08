@@ -111,6 +111,7 @@ class HierarchicalClient:
         device: str = "cpu",
         parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
         retriever_model_path: Optional[str] = None,
+        search_intent: str = "general"
     ):
         # We reuse ACEMementoRunner internally
         # Load initial playbook if path is provided
@@ -132,6 +133,7 @@ class HierarchicalClient:
             device=device,
             parametric_model_name=parametric_model_name,
             retriever_model_path=retriever_model_path,
+            search_intent=search_intent
         )
         self._memory_items = []
         self._memory_pairs = []
