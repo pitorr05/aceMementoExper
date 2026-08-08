@@ -93,7 +93,8 @@ class ACEMementoRunner:
         server_scripts: Optional[List[str]] = None,
         device: str = "cpu",
         parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
-        retriever_model_path: Optional[str] = None
+        retriever_model_path: Optional[str] = None,
+        search_intent: str = "general"
     ):
         self.api_provider = api_provider
         self.generator_model = generator_model
@@ -131,7 +132,8 @@ class ACEMementoRunner:
             top_k=case_bank_top_k,
             parametric_model_name=parametric_model_name,
             retriever_model_path=retriever_model_path,
-            device=device
+            device=device,
+            search_intent=search_intent
         )
 
         # 3. Core agents
