@@ -47,6 +47,13 @@ def parse_args():
     parser.add_argument("--device", type=str, default="cuda",
                         choices=["cuda", "cpu"],
                         help="Device to use: cuda or cpu")
+    parser.add_argument("--search_intent", type=str, default="general",
+                        choices=["general", "recall", "explore", "exact"],
+                        help="Search intent for Case Bank retrieval")
+    parser.add_argument("--case_bank_top_k", type=int, default=4,
+                        help="Number of cases to retrieve from Case Bank")
+    parser.add_argument("--disable_bm25", action="store_true",
+                        help="Disable BM25 in hybrid search (use vector only)")
     return parser.parse_args()
 
 
@@ -108,7 +115,9 @@ def main():
         use_failure_memory=args.use_failure_memory,
         failure_memory_top_k=3,
         memory_jsonl_path=os.path.join(args.save_dir, "case_bank.jsonl"),
-        device=args.device  
+        device=args.device,
+        case_bank_top_k=args.case_bank_top_k,
+        search_intent=args.search_intent
     )
 
     # --- Cấu hình training ---
