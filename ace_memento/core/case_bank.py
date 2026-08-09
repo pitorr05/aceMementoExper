@@ -168,7 +168,13 @@ class CaseBank:
     def load_cases(self) -> None:
         """Load cases from JSONL file and rebuild all indices."""
         self.cases = []
+        
+        # 🔧 SỬA LỖI 1: Luôn rebuild indices ngay cả khi file không tồn tại
         if not os.path.exists(self.memory_jsonl_path):
+            print(f"[CaseBank] Memory file not found: {self.memory_jsonl_path}")
+            # Tạo thư mục nếu chưa có
+            os.makedirs(os.path.dirname(self.memory_jsonl_path), exist_ok=True)
+            self._rebuild_indices()
             return
         
         try:
@@ -185,6 +191,8 @@ class CaseBank:
             self._rebuild_indices()
         except Exception as e:
             print(f"[CaseBank] Error loading cases: {e}")
+            # 🔧 SỬA LỖI 2: Vẫn gọi rebuild khi có lỗi
+            self._rebuild_indices()
     
     def add_case(self, question: str, plan: str, reward: int) -> None:
         """Add a new case and update all indices."""
@@ -231,16 +239,21 @@ class CaseBank:
                 if key not in _SHARED_MODELS:
                     print(f"[CaseBank] Loading shared model: {self.embedding_model_name} on {self.device}")
                     _SHARED_MODELS[key] = SentenceTransformer(self.embedding_model_name, device=self.device)
+                    print(f"[CaseBank]  Model loaded successfully")
                 self._emb_model = _SHARED_MODELS[key]
             except Exception as e:
                 print(f"[CaseBank] Error loading embedding model: {e}")
+                self._emb_model = None
     
     def _rebuild_indices(self) -> None:
         """Rebuild all indices (BM25, Vector) from scratch."""
+        print(f"[CaseBank]  Rebuilding indices for {len(self.cases)} cases...")
+        
         if not self.cases:
             self._embeddings = None
             self._corpus_texts = []
             self._bm25_index = None
+            print("[CaseBank]  No cases to build indices")
             return
         
         # 1. Rebuild BM25 index
@@ -250,62 +263,87 @@ class CaseBank:
                 # Tokenize documents
                 tokenized_corpus = [doc.split(" ") for doc in self._corpus_texts]
                 self._bm25_index = BM25Okapi(tokenized_corpus)
+                print(f"[CaseBank]  BM25 index built: {len(self._corpus_texts)} documents")
             except Exception as e:
                 print(f"[CaseBank] Error building BM25 index: {e}")
                 self._bm25_index = None
         else:
+            print(f"[CaseBank]  BM25 not available (BM25_AVAILABLE={BM25_AVAILABLE})")
             self._bm25_index = None
         
         # 2. Rebuild vector embeddings
-        if EMBEDDING_AVAILABLE and self._emb_model is None:
+        # 🔧 SỬA LỖI 3: Luôn load model nếu chưa có
+        if EMBEDDING_AVAILABLE:
             self._load_emb_model()
-        
-        if EMBEDDING_AVAILABLE and self._emb_model is not None:
-            try:
-                texts = [c["question"] for c in self.cases]
-                self._embeddings = self._emb_model.encode(
-                    texts,
-                    convert_to_numpy=True,
-                    normalize_embeddings=True,
-                    show_progress_bar=False
-                )
-            except Exception as e:
-                print(f"[CaseBank] Error encoding cases: {e}")
+            
+            if self._emb_model is not None:
+                try:
+                    texts = [c["question"] for c in self.cases]
+                    print(f"[CaseBank]  Encoding {len(texts)} texts with {self.embedding_model_name}...")
+                    self._embeddings = self._emb_model.encode(
+                        texts,
+                        convert_to_numpy=True,
+                        normalize_embeddings=True,
+                        show_progress_bar=False
+                    )
+                    print(f"[CaseBank]  Vector embeddings built: {len(self._embeddings)} vectors, shape={self._embeddings.shape}")
+                except Exception as e:
+                    print(f"[CaseBank] Error encoding cases: {e}")
+                    self._embeddings = None
+            else:
+                print("[CaseBank]  Embedding model not available")
                 self._embeddings = None
         else:
+            print("[CaseBank]  SentenceTransformers not available")
             self._embeddings = None
+        
+        print(f"[CaseBank]  Rebuild complete: BM25={self._bm25_index is not None}, Embeddings={self._embeddings is not None}")
     
     def _update_indices(self, new_case: Dict[str, Any]) -> None:
         """Update indices when a new case is added."""
-        # Update BM25 - rebuild if BM25 is available
-        if BM25_AVAILABLE and self._bm25_index is not None:
-            self._corpus_texts.append(new_case["question"])
+        # 🔧 SỬA LỖI 4: Xóa dòng append trùng lặp, chỉ append 1 lần
+        self._corpus_texts.append(new_case["question"])
+        
+        # Update BM25 - rebuild
+        if BM25_AVAILABLE and len(self._corpus_texts) > 0:
             try:
                 tokenized_corpus = [doc.split(" ") for doc in self._corpus_texts]
                 self._bm25_index = BM25Okapi(tokenized_corpus)
+                print(f"[CaseBank]  BM25 index updated: {len(self._corpus_texts)} documents")
             except Exception as e:
                 print(f"[CaseBank] Error updating BM25 index: {e}")
                 self._bm25_index = None
-        else:
-            self._corpus_texts.append(new_case["question"])
         
         # Update vector embeddings
-        if EMBEDDING_AVAILABLE and self._emb_model is not None:
-            try:
-                new_emb = self._emb_model.encode(
-                    [new_case["question"]],
-                    convert_to_numpy=True,
-                    normalize_embeddings=True,
-                    show_progress_bar=False
-                )
-                if self._embeddings is None or len(self._embeddings) == 0:
-                    self._embeddings = new_emb
-                else:
-                    self._embeddings = np.vstack([self._embeddings, new_emb])
-            except Exception as e:
-                print(f"[CaseBank] Error updating vector index: {e}")
-                # Fallback: rebuild all
-                self._rebuild_indices()
+        # 🔧 SỬA LỖI 5: Load model nếu chưa có
+        if EMBEDDING_AVAILABLE:
+            self._load_emb_model()
+            
+            if self._emb_model is not None:
+                try:
+                    new_emb = self._emb_model.encode(
+                        [new_case["question"]],
+                        convert_to_numpy=True,
+                        normalize_embeddings=True,
+                        show_progress_bar=False
+                    )
+                    if self._embeddings is None or len(self._embeddings) == 0:
+                        self._embeddings = new_emb
+                    else:
+                        self._embeddings = np.vstack([self._embeddings, new_emb])
+                    print(f"[CaseBank]  Vector embeddings updated: {len(self._embeddings)} vectors, shape={self._embeddings.shape}")
+                except Exception as e:
+                    print(f"[CaseBank] Error updating vector index: {e}")
+                    # Fallback: rebuild all
+                    self._rebuild_indices()
+            else:
+                print("[CaseBank]  Embedding model not available, vector index not updated")
+    
+    def _ensure_indices(self) -> None:
+        """ THÊM MỚI: Ensure indices are built. Rebuild if missing."""
+        if self.cases and (self._embeddings is None or self._bm25_index is None):
+            print("[CaseBank]  Indices missing, rebuilding...")
+            self._rebuild_indices()
     
     def retrieve_cases(
         self, 
@@ -330,6 +368,10 @@ class CaseBank:
         
         if not self.cases or k <= 0:
             return []
+        
+        # 🔧 SỬA LỖI 6: Đảm bảo indices đã được build
+        self._ensure_indices()
+        
         print(f"[CaseBank] DEBUG: cases={len(self.cases)}, bm25_index={self._bm25_index is not None}, embeddings={self._embeddings is not None}")
         # 1. Try parametric retrieval first (neural classifier)
         if TORCH_AVAILABLE and self._para_model is not None:
