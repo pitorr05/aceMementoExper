@@ -107,6 +107,9 @@ def parse_args():
                         help="Path to neural retriever checkpoint for parametric retrieval in CaseBank")
     parser.add_argument("--parametric_model_name", type=str, default="princeton-nlp/sup-simcse-roberta-base",
                         help="HuggingFace model backbone name for parametric retriever model")
+    parser.add_argument("--search_intent", type=str, default="general",
+                        choices=["recall", "explore", "exact", "general"],
+                        help="Search intent for CaseBank retrieval: recall, explore, exact, general")
     
     # Output configuration
     parser.add_argument("--save_path", type=str, default=None,
@@ -275,6 +278,7 @@ def main():
         adversarial_frequency=args.adversarial_frequency,
         parametric_model_name=args.parametric_model_name,
         retriever_model_path=args.retriever_model_path,
+        search_intent=args.search_intent,
     )
     
     # Prepare configuration
