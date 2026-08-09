@@ -330,9 +330,10 @@ class CaseBank:
         
         if not self.cases or k <= 0:
             return []
-        
+        print(f"[CaseBank] DEBUG: cases={len(self.cases)}, bm25_index={self._bm25_index is not None}, embeddings={self._embeddings is not None}")
         # 1. Try parametric retrieval first (neural classifier)
         if TORCH_AVAILABLE and self._para_model is not None:
+            print("[CaseBank]  Using PARAMETRIC retrieval")
             try:
                 return self._parametric_retrieval(query, k)
             except Exception as e:
@@ -341,6 +342,7 @@ class CaseBank:
         
         # 2. Hybrid Search: BM25 + Vector
         if BM25_AVAILABLE and self._bm25_index is not None and EMBEDDING_AVAILABLE and self._embeddings is not None:
+            print("[CaseBank]  Using HYBRID retrieval (BM25 + Vector)")
             try:
                 return self._hybrid_retrieval(query, k, intent)
             except Exception as e:
