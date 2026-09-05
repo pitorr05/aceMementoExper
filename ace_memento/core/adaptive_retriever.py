@@ -35,7 +35,6 @@ class AdaptiveRetriever:
     def set_bm25_index(self, bm25_index):
         """Set BM25 index (disabled - kept for compatibility)"""
         self.bm25_index = bm25_index
-        # BM25 is disabled, but method kept for compatibility
     
     def retrieve(
         self,
@@ -93,9 +92,9 @@ class AdaptiveRetriever:
         for item in candidates:
             idx = item["idx"]
             emb = self.embedding_vectors[idx]
-            similarity = np.dot(emb, query_embedding)  # Cosine similarity
+            similarity = np.dot(emb, query_embedding)
             item["vector_score"] = float(similarity)
-            item["combined_score"] = similarity  # Only vector score
+            item["combined_score"] = similarity
         
         # Sort by combined score
         sorted_candidates = sorted(
@@ -124,11 +123,9 @@ class AdaptiveRetriever:
             
             score_boost = 0.0
             
-            # Boost successful cases
             if metadata.get("reward") == 1:
                 score_boost += 0.1
             
-            # Boost cases with similar error
             if previous_error and metadata.get("error_identification") == previous_error:
                 score_boost += 0.2
             
@@ -145,6 +142,10 @@ class AdaptiveRetriever:
     ) -> List[Dict[str, Any]]:
         """Select diverse cases (MMR-style)"""
         if len(candidates) <= k:
+            return candidates[:k]
+        
+        # 🔧 THÊM CHECK NÀY
+        if self.embedding_vectors is None:
             return candidates[:k]
         
         selected = []
@@ -198,6 +199,10 @@ class AdaptiveRetriever:
     
     def _get_similarity(self, idx1: int, idx2: int) -> float:
         """Compute cosine similarity between two entries"""
+        # 🔧 THÊM CHECK NÀY
+        if self.embedding_vectors is None:
+            return 0.0
+        
         emb1 = self.embedding_vectors[idx1]
         emb2 = self.embedding_vectors[idx2]
         return float(np.dot(emb1, emb2))
