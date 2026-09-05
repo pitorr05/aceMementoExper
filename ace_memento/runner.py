@@ -65,7 +65,6 @@ def find_latest_playbook(run_path: str) -> Tuple[Optional[str], int, int]:
     return latest_file, max_epoch, max_step
 
 
-
 class ACEMementoRunner:
     """
     Main ACE-Memento Orchestrator.
@@ -93,7 +92,10 @@ class ACEMementoRunner:
         server_scripts: Optional[List[str]] = None,
         device: str = "cpu",
         parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
-        retriever_model_path: Optional[str] = None
+        retriever_model_path: Optional[str] = None,
+        # --- AMORE parameters ---
+        use_amore: bool = False,
+        consolidation_frequency: int = 50,
     ):
         self.api_provider = api_provider
         self.generator_model = generator_model
@@ -105,6 +107,10 @@ class ACEMementoRunner:
         self.case_bank_top_k = case_bank_top_k
         self.parametric_model_name = parametric_model_name
         self.retriever_model_path = retriever_model_path
+
+        # AMORE settings
+        self.use_amore = use_amore
+        self.consolidation_frequency = consolidation_frequency
 
         # Auto-detect device if default 'cpu' is requested but cuda is available
         if device == "cpu":
@@ -125,14 +131,32 @@ class ACEMementoRunner:
             device=device
         )
 
-        # 2. Case Bank (Episodic Memory)
-        self.case_bank = CaseBank(
-            memory_jsonl_path=memory_jsonl_path,
-            top_k=case_bank_top_k,
-            parametric_model_name=parametric_model_name,
-            retriever_model_path=retriever_model_path,
-            device=device
-        )
+        # 2. Memory System (Episodic Memory) - AMORE or CaseBank
+        if use_amore:
+            from .core.amore_memory import AMOREMemory
+            
+            print("[ACEMementoRunner] Initializing AMORE Memory System (Socratic Contradiction Resolution)")
+            self.memory = AMOREMemory(
+                memory_jsonl_path=memory_jsonl_path,
+                llm_client=generator_client,
+                llm_provider=api_provider,
+                llm_model=generator_model,
+                playbook_manager=self.playbook_manager,
+                embedding_model=self.playbook_manager._model,
+                top_k=case_bank_top_k,
+                consolidation_frequency=consolidation_frequency,
+                device=device,
+            )
+            self.case_bank = self.memory  # For compatibility
+        else:
+            print("[ACEMementoRunner] Initializing CaseBank")
+            self.case_bank = CaseBank(
+                memory_jsonl_path=memory_jsonl_path,
+                top_k=case_bank_top_k,
+                parametric_model_name=parametric_model_name,
+                retriever_model_path=retriever_model_path,
+                device=device
+            )
 
         # 3. Core agents
         self.planner = Planner(generator_client, api_provider, generator_model, max_tokens)
@@ -257,6 +281,8 @@ class ACEMementoRunner:
                 "adversarial_frequency": self.adversarial_frequency,
                 "parametric_model_name": self.parametric_model_name,
                 "retriever_model_path": self.retriever_model_path,
+                "use_amore": self.use_amore,
+                "consolidation_frequency": self.consolidation_frequency,
                 **config
             }
             run_config_path = os.path.join(run_path, "run_config.json")
@@ -557,6 +583,10 @@ class ACEMementoRunner:
             print(f"RUN COMPLETE")
             print(f"{'='*60}")
             print(f"Mode: {mode.upper()}")
+            if self.use_amore:
+                print(f"Memory System: AMORE (Socratic Contradiction Resolution)")
+            else:
+                print(f"Memory System: CaseBank")
             print(f"Best Validation Accuracy: {best_accuracy:.3f}")
             if test_samples:
                 print(f"Initial Test Accuracy: {initial_test_accuracy:.3f}")
@@ -567,7 +597,6 @@ class ACEMementoRunner:
         elif mode == "online":
             print(f"--- Starting Online Training on {len(test_samples or [])} samples ---")
             initial_test_accuracy = 0.0
-            # Skip initial test on resume to save time and API costs
             if test_samples and not resume_from:
                 initial_test_res = await self._run_test(
                     test_samples=test_samples,
@@ -586,7 +615,6 @@ class ACEMementoRunner:
             total_count = 0
             
             if resume_step > 0:
-                # Reconstruct correct_count and total_count from CaseBank
                 completed_cases = self.case_bank.cases[:resume_step]
                 correct_count = sum(1 for c in completed_cases if c.get("reward") == 1)
                 total_count = len(completed_cases)
@@ -597,20 +625,17 @@ class ACEMementoRunner:
                 end_idx = min(start_idx + online_eval_freq, len(test_samples))
                 win_samples = test_samples[start_idx:end_idx]
                 
-                # Filter unseen samples in this window for testing to prevent double-counting
                 win_samples_test = []
                 for local_idx, sample in enumerate(win_samples, 1):
                     global_step = start_idx + local_idx
                     if global_step > resume_step:
                         win_samples_test.append(sample)
                 
-                # If the entire window is already trained, skip it entirely
                 if not win_samples_test:
                     continue
 
                 print(f"\n--- Window {win_idx + 1}/{num_windows} (Samples {start_idx} to {end_idx - 1}, remaining test: {len(win_samples_test)}) ---")
                 
-                # Test on window (before training on it)
                 win_test_res = await self._run_test(
                     test_samples=win_samples_test,
                     data_processor=data_processor,
@@ -622,7 +647,6 @@ class ACEMementoRunner:
                 correct_count += win_test_res["correct"]
                 total_count += win_test_res["total"]
                 
-                # Train on window
                 for local_step, sample in enumerate(win_samples, 1):
                     global_step = start_idx + local_step
                     if global_step <= resume_step:
@@ -710,7 +734,6 @@ class ACEMementoRunner:
                                 print(f"Corrected reasoning on round {r}!")
                                 break
 
-                        # Store distilled insights from the last reflection into memory
                         if self.use_failure_memory and self.failure_memory and reflection not in ("(empty)", ""):
                             try:
                                 parsed = json.loads(reflection) if isinstance(reflection, str) else {}
@@ -740,7 +763,6 @@ class ACEMementoRunner:
                         )
                         self.playbook_manager.update_playbook(updated_playbook)
 
-                    # Run adversarial episode
                     if self.use_adversarial and self.adversarial_agent:
                         await self._run_adversarial_episode(
                             step_id=f"online_s{global_step}",
@@ -755,7 +777,6 @@ class ACEMementoRunner:
                             data_processor=data_processor
                         )
 
-                    # Save intermediate playbook at each step
                     save_steps = config.get("save_steps", 50)
                     if global_step % save_steps == 0:
                         step_playbook_path = os.path.join(run_path, f"step_{global_step}_playbook.txt")
@@ -769,16 +790,18 @@ class ACEMementoRunner:
                 "total": total_count
             }
 
-            # Save final playbook and case bank
             final_playbook_path = os.path.join(run_path, "final_playbook.txt")
             with open(final_playbook_path, "w", encoding="utf-8") as f:
                 f.write(self.playbook_manager.playbook)
             
-            # Print final summary banner matching standard ACE format
             print(f"\n{'='*60}")
             print(f"ONLINE TRAIN AND TEST COMPLETE")
             print(f"{'='*60}")
             print(f"Mode: {mode.upper()}")
+            if self.use_amore:
+                print(f"Memory System: AMORE (Socratic Contradiction Resolution)")
+            else:
+                print(f"Memory System: CaseBank")
             print(f"Initial Test Accuracy: {initial_test_accuracy:.3f}")
             print(f"Final Test Accuracy: {final_test_accuracy:.3f}")
             print(f"Results saved to: {run_path}")
@@ -807,7 +830,6 @@ class ACEMementoRunner:
             total_eval_time = eval_end_time - eval_start_time
             avg_run_time = total_eval_time / len(test_samples) if test_samples else 0.0
 
-            # Stop VRAM monitor and get metrics
             avg_vram = None
             gpu_averages = None
             if vram_monitor:
@@ -818,21 +840,22 @@ class ACEMementoRunner:
 
             results["test_results"] = test_res
             
-            # Calculate LLM speeds
             llm_stats = calculate_llm_statistics(log_dir)
             
             results["total_running_time"] = total_eval_time
             results["avg_running_time_per_sample"] = avg_run_time
             results["llm_statistics"] = llm_stats
             
-            # Print statistics
             print_eval_statistics_banner(total_eval_time, avg_run_time, llm_stats, avg_vram=avg_vram, gpu_averages=gpu_averages)
             
-            # Print final summary banner matching standard ACE format
             print(f"\n{'='*60}")
             print(f"RUN COMPLETE")
             print(f"{'='*60}")
             print(f"Mode: {mode.upper()}")
+            if self.use_amore:
+                print(f"Memory System: AMORE (Socratic Contradiction Resolution)")
+            else:
+                print(f"Memory System: CaseBank")
             print(f"Test Accuracy: {test_res['accuracy']:.3f} ({test_res['correct']}/{test_res['total']} samples correct)")
             print(f"Results saved to: {run_path}")
             print(f"{'='*60}\n")
@@ -880,7 +903,6 @@ class ACEMementoRunner:
                 print(f"Error evaluating validation sample {step}: {e}")
                 return "No final answer found", target
 
-        # Run concurrently using a Semaphore to respect config.test_workers
         test_workers = config.get("test_workers", 5)
         sem = asyncio.Semaphore(test_workers)
         async def sem_eval(step, sample):

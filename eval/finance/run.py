@@ -108,6 +108,12 @@ def parse_args():
     parser.add_argument("--parametric_model_name", type=str, default="princeton-nlp/sup-simcse-roberta-base",
                         help="HuggingFace model backbone name for parametric retriever model")
     
+    # --- AMORE configuration (THÊM MỚI) ---
+    parser.add_argument("--use_amore", action="store_true",
+                        help="Enable AMORE memory system (Socratic Contradiction Resolution)")
+    parser.add_argument("--consolidation_frequency", type=int, default=50,
+                        help="Run memory consolidation every N steps (default: 50)")
+    
     # Output configuration
     parser.add_argument("--save_path", type=str, default=None,
                         help="Directory to save results")
@@ -256,7 +262,7 @@ def main():
     else:
         print("Using empty playbook as initial playbook\n")
     
-    # Create ACE system
+    # Create ACE system - THÊM CÁC THAM SỐ AMORE
     ace_system = ACE(
         api_provider=args.api_provider,
         generator_model=args.generator_model,
@@ -275,9 +281,12 @@ def main():
         adversarial_frequency=args.adversarial_frequency,
         parametric_model_name=args.parametric_model_name,
         retriever_model_path=args.retriever_model_path,
+        # --- AMORE parameters (THÊM MỚI) ---
+        use_amore=args.use_amore,
+        consolidation_frequency=args.consolidation_frequency,
     )
     
-    # Prepare configuration
+    # Prepare configuration - THÊM CÁC THAM SỐ AMORE VÀO CONFIG
     config = {
         'num_epochs': args.num_epochs,
         'max_num_rounds': args.max_num_rounds,
@@ -305,6 +314,9 @@ def main():
         'seed': args.seed,
         'retriever_model_path': args.retriever_model_path,
         'parametric_model_name': args.parametric_model_name,
+        # --- AMORE config (THÊM MỚI) ---
+        'use_amore': args.use_amore,
+        'consolidation_frequency': args.consolidation_frequency,
     }
     
     if args.mode == "eval_only" and test_samples:
