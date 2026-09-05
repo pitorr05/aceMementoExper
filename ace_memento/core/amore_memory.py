@@ -123,6 +123,8 @@ class AMOREMemory:
             self._rebuild_indices()
         except Exception as e:
             print(f"[AMORE] Error loading memory: {e}")
+    def load_cases(self) -> None:
+        self.load()
     
     def save(self) -> None:
         """Save memory to JSONL file"""
