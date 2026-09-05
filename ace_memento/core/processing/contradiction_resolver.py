@@ -102,7 +102,7 @@ Hypothesize what the conversation likely contains (1-3 sentences).
 If no hypothesis can be formed, output "NO_HYPOTHESIS".
 """
         
-        response, _ = await timed_llm_call(
+        response, _ = timed_llm_call(
             self.llm_client,
             self.llm_provider,
             self.llm_model,
@@ -161,7 +161,7 @@ Output each contradiction as a separate line.
 If no contradictions found, output "NO_CONTRADICTIONS".
 """
         
-        response, _ = await timed_llm_call(
+        response, _ = timed_llm_call(
             self.llm_client,
             self.llm_provider,
             self.llm_model,
