@@ -112,7 +112,7 @@ Confidence guide:
 - 0.0-0.5: Clearly continuing
 """
         
-        response, _ = await timed_llm_call(
+        response, _ = timed_llm_call(
             self.llm_client,
             self.llm_provider,
             self.llm_model,
