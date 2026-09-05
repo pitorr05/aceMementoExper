@@ -78,6 +78,7 @@ Example:
             self.llm_model,
             prompt,
             role="compressor",
+            call_id="compressor",
             max_tokens=1024,
         )
         

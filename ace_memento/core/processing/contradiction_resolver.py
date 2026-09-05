@@ -108,6 +108,7 @@ If no hypothesis can be formed, output "NO_HYPOTHESIS".
             self.llm_model,
             prompt,
             role="hypothesizer",
+            call_id="hypothesizer",
             max_tokens=512,
         )
         
@@ -166,6 +167,7 @@ If no contradictions found, output "NO_CONTRADICTIONS".
             self.llm_model,
             prompt,
             role="contradiction_finder",
+            call_id="contradiction_finder",
             max_tokens=1024,
         )
         
