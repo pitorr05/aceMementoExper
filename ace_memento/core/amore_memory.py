@@ -132,7 +132,7 @@ class AMOREMemory:
         except Exception as e:
             print(f"[AMORE] Error saving: {e}")
     
-    def add_case(
+    async def add_case(
         self,
         question: str,
         plan: str,
