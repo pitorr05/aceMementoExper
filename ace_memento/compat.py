@@ -67,6 +67,11 @@ class ACE(ACEMementoRunner):
         device: str = "cpu",
         parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
         retriever_model_path: Optional[str] = None,
+        # --- AMORE parameters ---
+        use_amore: bool = False,
+        consolidation_frequency: int = 50,
+        utility_threshold: float = 0.15,
+        uncertainty_threshold: float = 0.3,
     ):
         super().__init__(
             api_provider=api_provider,
@@ -87,6 +92,11 @@ class ACE(ACEMementoRunner):
             device=device,
             parametric_model_name=parametric_model_name,
             retriever_model_path=retriever_model_path,
+            # AMORE
+            use_amore=use_amore,
+            consolidation_frequency=consolidation_frequency,
+            utility_threshold=utility_threshold,
+            uncertainty_threshold=uncertainty_threshold,
         )
 
 
@@ -109,6 +119,11 @@ class HierarchicalClient:
         device: str = "cpu",
         parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
         retriever_model_path: Optional[str] = None,
+        # --- AMORE parameters ---
+        use_amore: bool = False,
+        consolidation_frequency: int = 50,
+        utility_threshold: float = 0.15,
+        uncertainty_threshold: float = 0.3,
     ):
         # We reuse ACEMementoRunner internally
         # Load initial playbook if path is provided
@@ -130,6 +145,11 @@ class HierarchicalClient:
             device=device,
             parametric_model_name=parametric_model_name,
             retriever_model_path=retriever_model_path,
+            # AMORE
+            use_amore=use_amore,
+            consolidation_frequency=consolidation_frequency,
+            utility_threshold=utility_threshold,
+            uncertainty_threshold=uncertainty_threshold,
         )
         self._memory_items = []
         self._memory_pairs = []

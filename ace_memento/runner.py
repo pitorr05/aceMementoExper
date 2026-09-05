@@ -16,6 +16,14 @@ from .core.failure_memory import FailureMemoryBank
 from .core.adversarial_agent import AdversarialAgent
 from .utils.llm import initialize_clients
 
+# --- AMORE imports ---
+try:
+    from .core.amore_memory import AMOREMemory
+    AMORE_AVAILABLE = True
+except ImportError:
+    AMORE_AVAILABLE = False
+    print("Warning: AMORE not available. Falling back to CaseBank.")
+
 
 def find_latest_playbook(run_path: str) -> Tuple[Optional[str], int, int]:
     """
@@ -65,7 +73,6 @@ def find_latest_playbook(run_path: str) -> Tuple[Optional[str], int, int]:
     return latest_file, max_epoch, max_step
 
 
-
 class ACEMementoRunner:
     """
     Main ACE-Memento Orchestrator.
@@ -93,7 +100,12 @@ class ACEMementoRunner:
         server_scripts: Optional[List[str]] = None,
         device: str = "cpu",
         parametric_model_name: str = "princeton-nlp/sup-simcse-roberta-base",
-        retriever_model_path: Optional[str] = None
+        retriever_model_path: Optional[str] = None,
+        # --- AMORE parameters ---
+        use_amore: bool = False,
+        consolidation_frequency: int = 50,
+        utility_threshold: float = 0.15,
+        uncertainty_threshold: float = 0.3,
     ):
         self.api_provider = api_provider
         self.generator_model = generator_model
@@ -105,6 +117,12 @@ class ACEMementoRunner:
         self.case_bank_top_k = case_bank_top_k
         self.parametric_model_name = parametric_model_name
         self.retriever_model_path = retriever_model_path
+        
+        # AMORE settings
+        self.use_amore = use_amore and AMORE_AVAILABLE
+        self.consolidation_frequency = consolidation_frequency
+        self.utility_threshold = utility_threshold
+        self.uncertainty_threshold = uncertainty_threshold
 
         # Auto-detect device if default 'cpu' is requested but cuda is available
         if device == "cpu":
@@ -125,14 +143,35 @@ class ACEMementoRunner:
             device=device
         )
 
-        # 2. Case Bank (Episodic Memory)
-        self.case_bank = CaseBank(
-            memory_jsonl_path=memory_jsonl_path,
-            top_k=case_bank_top_k,
-            parametric_model_name=parametric_model_name,
-            retriever_model_path=retriever_model_path,
-            device=device
-        )
+        # 2. Memory System (Episodic Memory) - AMORE or CaseBank
+        if self.use_amore:
+            print(f"[ACEMementoRunner] Initializing AMORE Memory System")
+            print(f"  - Consolidation frequency: {consolidation_frequency}")
+            print(f"  - Utility threshold: {utility_threshold}")
+            print(f"  - Uncertainty threshold: {uncertainty_threshold}")
+            
+            self.memory = AMOREMemory(
+                memory_jsonl_path=memory_jsonl_path,
+                api_client=generator_client,
+                api_provider=api_provider,
+                generator_model=generator_model,
+                top_k=case_bank_top_k,
+                device=device,
+                consolidation_frequency=consolidation_frequency,
+                utility_threshold=utility_threshold,
+                uncertainty_threshold=uncertainty_threshold
+            )
+            # For compatibility, alias case_bank to memory
+            self.case_bank = self.memory
+        else:
+            print("[ACEMementoRunner] Initializing CaseBank")
+            self.case_bank = CaseBank(
+                memory_jsonl_path=memory_jsonl_path,
+                top_k=case_bank_top_k,
+                parametric_model_name=parametric_model_name,
+                retriever_model_path=retriever_model_path,
+                device=device
+            )
 
         # 3. Core agents
         self.planner = Planner(generator_client, api_provider, generator_model, max_tokens)
@@ -164,6 +203,10 @@ class ACEMementoRunner:
 
         self.next_global_id = 1
         self._recompute_next_global_id()
+        
+        # Track rounds for adaptive retrieval (AMORE)
+        self._current_round = 0
+        self._previous_error = None
 
     def _recompute_next_global_id(self) -> None:
         """Find the next ID to assign to playbook bullets."""
@@ -174,6 +217,65 @@ class ACEMementoRunner:
                 num = int(id_match.group(1))
                 max_id = max(max_id, num)
         self.next_global_id = max_id + 1
+
+    def _retrieve_memory_with_adaptive(
+        self,
+        query: str,
+        round_idx: int = 0,
+        previous_error: Optional[str] = None
+    ) -> Tuple[List[Dict[str, Any]], str]:
+        """
+        Retrieve memory with adaptive strategy (for AMORE).
+        Falls back to standard retrieval if not using AMORE.
+        """
+        if self.use_amore:
+            # AMORE: adaptive retrieval
+            retrieved = self.memory.retrieve_cases(
+                query=query,
+                top_k=self.case_bank_top_k,
+                round_idx=round_idx,
+                previous_error=previous_error
+            )
+            cases_text = self.memory.format_cases_for_prompt(retrieved)
+        else:
+            # Standard retrieval
+            retrieved = self.case_bank.retrieve_cases(query)
+            cases_text = self.case_bank.format_cases_for_prompt(retrieved)
+        
+        return retrieved, cases_text
+
+    def _store_memory(
+        self,
+        query: str,
+        plan: str,
+        reward: int,
+        final_answer: str = "",
+        reasoning_trace: str = "",
+        bullet_ids_used: List[str] = None,
+        error_identification: str = "",
+        root_cause: str = "",
+        key_insight: str = "",
+        playbook: str = "",
+    ) -> bool:
+        """
+        Store to memory with AMORE's Predict-Calibrate gate if enabled.
+        """
+        if self.use_amore:
+            return self.memory.add_case(
+                question=query,
+                plan=plan,
+                reward=reward,
+                final_answer=final_answer,
+                reasoning_trace=reasoning_trace,
+                bullet_ids_used=bullet_ids_used or [],
+                error_identification=error_identification,
+                root_cause=root_cause,
+                key_insight=key_insight,
+                playbook=playbook or self.playbook_manager.playbook
+            )
+        else:
+            self.case_bank.add_case(query, plan, reward)
+            return True
 
     def run(
         self,
@@ -257,6 +359,10 @@ class ACEMementoRunner:
                 "adversarial_frequency": self.adversarial_frequency,
                 "parametric_model_name": self.parametric_model_name,
                 "retriever_model_path": self.retriever_model_path,
+                "use_amore": self.use_amore,
+                "consolidation_frequency": self.consolidation_frequency,
+                "utility_threshold": self.utility_threshold,
+                "uncertainty_threshold": self.uncertainty_threshold,
                 **config
             }
             run_config_path = os.path.join(run_path, "run_config.json")
@@ -347,9 +453,17 @@ class ACEMementoRunner:
                     query = sample.get("question", "")
                     context = sample.get("context", "")
                     target = sample.get("target", "")
+                    
+                    # Reset round tracking for AMORE
+                    self._current_round = 0
+                    self._previous_error = None
 
-                    retrieved_cases = self.case_bank.retrieve_cases(query)
-                    cases_text = self.case_bank.format_cases_for_prompt(retrieved_cases)
+                    # Initial retrieval
+                    retrieved_cases, cases_text = self._retrieve_memory_with_adaptive(
+                        query=query,
+                        round_idx=0,
+                        previous_error=None
+                    )
                     
                     playbook = self.playbook_manager.retrieve_bullets(query, self.rae_top_k) if self.use_rae else self.playbook_manager.playbook
 
@@ -371,7 +485,18 @@ class ACEMementoRunner:
                     print(f"Predicted answer: {final_answer} | Target: {target} | Correct: {is_correct}")
 
                     # 4. Write case to episodic memory (Memento CASE WRITE)
-                    self.case_bank.add_case(query, trajectory["plan_json"], reward)
+                    stored = self._store_memory(
+                        query=query,
+                        plan=trajectory.get("plan_json", ""),
+                        reward=reward,
+                        final_answer=final_answer,
+                        reasoning_trace=trajectory.get("plan_json", ""),
+                        bullet_ids_used=bullet_ids_used
+                    )
+                    if stored:
+                        print(f"[Memory] Case stored (reward={reward})")
+                    else:
+                        print(f"[Memory] Case filtered by Predict-Calibrate gate")
 
                     # 5. Reflect and Curate (ACE context engineering)
                     trajectory_str = json.dumps(trajectory, indent=2)
@@ -396,14 +521,21 @@ class ACEMementoRunner:
                     else:
                         # Incorrect: run reflection rounds
                         reflection = ""
+                        parsed = {}
                         for r in range(max_num_rounds):
+                            self._current_round = r + 1
+                            
                             # Retrieve negative cases for analogical context
                             if self.use_failure_memory and self.failure_memory:
                                 similar_failures = self.failure_memory.retrieve(query)
                                 analogical_context = self.failure_memory.format_for_prompt(similar_failures)
                             else:
-                                neg_cases = [c for c in retrieved_cases if c.get("reward") == 0]
-                                analogical_context = self.case_bank.format_cases_for_prompt(neg_cases)
+                                # AMORE: adaptive retrieval with previous error
+                                retrieved_cases, analogical_context = self._retrieve_memory_with_adaptive(
+                                    query=query,
+                                    round_idx=r + 1,
+                                    previous_error=self._previous_error
+                                )
                             
                             reflection, bullet_tags, _ = self.reflector.reflect(
                                 question=query,
@@ -422,7 +554,20 @@ class ACEMementoRunner:
                             updated_playbook = self.curator.update_bullet_counts(self.playbook_manager.playbook, bullet_tags)
                             self.playbook_manager.update_playbook(updated_playbook)
 
-                            # Try to regenerate
+                            # Parse reflection for error identification
+                            try:
+                                parsed = json.loads(reflection) if isinstance(reflection, str) else {}
+                                self._previous_error = parsed.get("error_identification", "")
+                            except:
+                                pass
+
+                            # Try to regenerate with adaptive retrieval
+                            retrieved_cases, cases_text = self._retrieve_memory_with_adaptive(
+                                query=query,
+                                round_idx=r + 1,
+                                previous_error=self._previous_error
+                            )
+                            
                             final_answer, bullet_ids_used, trajectory = await self.generator.generate(
                                 question=query,
                                 playbook=self.playbook_manager.retrieve_bullets(query, self.rae_top_k) if self.use_rae else self.playbook_manager.playbook,
@@ -450,6 +595,19 @@ class ACEMementoRunner:
                                 root_cause=parsed.get("root_cause_analysis", ""),
                                 key_insight=parsed.get("key_insight", ""),
                             )
+
+                        # Store failure with AMORE (rich metadata)
+                        self._store_memory(
+                            query=query,
+                            plan=trajectory.get("plan_json", ""),
+                            reward=0,
+                            final_answer=initial_answer,
+                            reasoning_trace=trajectory.get("plan_json", ""),
+                            bullet_ids_used=bullet_ids_used,
+                            error_identification=parsed.get("error_identification", ""),
+                            root_cause=parsed.get("root_cause_analysis", ""),
+                            key_insight=parsed.get("key_insight", ""),
+                        )
 
                         # Curate: evolve semantic playbook rules
                         stats = self.curator.get_playbook_stats(self.playbook_manager.playbook)
@@ -552,11 +710,12 @@ class ACEMementoRunner:
             results["training"] = "completed"
             results["best_validation_accuracy"] = best_accuracy
             
-            # Print final summary banner matching standard ACE format
+            # Print final summary banner
             print(f"\n{'='*60}")
             print(f"RUN COMPLETE")
             print(f"{'='*60}")
             print(f"Mode: {mode.upper()}")
+            print(f"Memory System: {'AMORE' if self.use_amore else 'CaseBank'}")
             print(f"Best Validation Accuracy: {best_accuracy:.3f}")
             if test_samples:
                 print(f"Initial Test Accuracy: {initial_test_accuracy:.3f}")
@@ -567,7 +726,6 @@ class ACEMementoRunner:
         elif mode == "online":
             print(f"--- Starting Online Training on {len(test_samples or [])} samples ---")
             initial_test_accuracy = 0.0
-            # Skip initial test on resume to save time and API costs
             if test_samples and not resume_from:
                 initial_test_res = await self._run_test(
                     test_samples=test_samples,
@@ -586,7 +744,6 @@ class ACEMementoRunner:
             total_count = 0
             
             if resume_step > 0:
-                # Reconstruct correct_count and total_count from CaseBank
                 completed_cases = self.case_bank.cases[:resume_step]
                 correct_count = sum(1 for c in completed_cases if c.get("reward") == 1)
                 total_count = len(completed_cases)
@@ -597,20 +754,17 @@ class ACEMementoRunner:
                 end_idx = min(start_idx + online_eval_freq, len(test_samples))
                 win_samples = test_samples[start_idx:end_idx]
                 
-                # Filter unseen samples in this window for testing to prevent double-counting
                 win_samples_test = []
                 for local_idx, sample in enumerate(win_samples, 1):
                     global_step = start_idx + local_idx
                     if global_step > resume_step:
                         win_samples_test.append(sample)
                 
-                # If the entire window is already trained, skip it entirely
                 if not win_samples_test:
                     continue
 
                 print(f"\n--- Window {win_idx + 1}/{num_windows} (Samples {start_idx} to {end_idx - 1}, remaining test: {len(win_samples_test)}) ---")
                 
-                # Test on window (before training on it)
                 win_test_res = await self._run_test(
                     test_samples=win_samples_test,
                     data_processor=data_processor,
@@ -622,7 +776,6 @@ class ACEMementoRunner:
                 correct_count += win_test_res["correct"]
                 total_count += win_test_res["total"]
                 
-                # Train on window
                 for local_step, sample in enumerate(win_samples, 1):
                     global_step = start_idx + local_step
                     if global_step <= resume_step:
@@ -632,9 +785,15 @@ class ACEMementoRunner:
                     query = sample.get("question", "")
                     context = sample.get("context", "")
                     target = sample.get("target", "")
-
-                    retrieved_cases = self.case_bank.retrieve_cases(query)
-                    cases_text = self.case_bank.format_cases_for_prompt(retrieved_cases)
+                    
+                    self._current_round = 0
+                    self._previous_error = None
+                    
+                    retrieved_cases, cases_text = self._retrieve_memory_with_adaptive(
+                        query=query,
+                        round_idx=0,
+                        previous_error=None
+                    )
                     playbook = self.playbook_manager.retrieve_bullets(query, self.rae_top_k) if self.use_rae else self.playbook_manager.playbook
 
                     final_answer, bullet_ids_used, trajectory = await self.generator.generate(
@@ -652,7 +811,14 @@ class ACEMementoRunner:
                     reward = 1 if is_correct else 0
                     print(f"Predicted: {final_answer} | Target: {target} | Correct: {is_correct}")
 
-                    self.case_bank.add_case(query, trajectory["plan_json"], reward)
+                    self._store_memory(
+                        query=query,
+                        plan=trajectory.get("plan_json", ""),
+                        reward=reward,
+                        final_answer=final_answer,
+                        reasoning_trace=trajectory.get("plan_json", ""),
+                        bullet_ids_used=bullet_ids_used
+                    )
 
                     trajectory_str = json.dumps(trajectory, indent=2)
                     bullets_used_str = "\n".join([b["original_line"] for b in self.playbook_manager.bullets if b["id"] in bullet_ids_used])
@@ -673,13 +839,19 @@ class ACEMementoRunner:
                         self.playbook_manager.update_playbook(updated_playbook)
                     else:
                         reflection = ""
+                        parsed = {}
                         for r in range(max_num_rounds):
+                            self._current_round = r + 1
+                            
                             if self.use_failure_memory and self.failure_memory:
                                 similar_failures = self.failure_memory.retrieve(query)
                                 analogical_context = self.failure_memory.format_for_prompt(similar_failures)
                             else:
-                                neg_cases = [c for c in retrieved_cases if c.get("reward") == 0]
-                                analogical_context = self.case_bank.format_cases_for_prompt(neg_cases)
+                                retrieved_cases, analogical_context = self._retrieve_memory_with_adaptive(
+                                    query=query,
+                                    round_idx=r + 1,
+                                    previous_error=self._previous_error
+                                )
                             
                             reflection, bullet_tags, _ = self.reflector.reflect(
                                 question=query,
@@ -697,6 +869,18 @@ class ACEMementoRunner:
                             updated_playbook = self.curator.update_bullet_counts(self.playbook_manager.playbook, bullet_tags)
                             self.playbook_manager.update_playbook(updated_playbook)
 
+                            try:
+                                parsed = json.loads(reflection) if isinstance(reflection, str) else {}
+                                self._previous_error = parsed.get("error_identification", "")
+                            except:
+                                pass
+
+                            retrieved_cases, cases_text = self._retrieve_memory_with_adaptive(
+                                query=query,
+                                round_idx=r + 1,
+                                previous_error=self._previous_error
+                            )
+                            
                             final_answer, bullet_ids_used, trajectory = await self.generator.generate(
                                 question=query,
                                 playbook=self.playbook_manager.retrieve_bullets(query, self.rae_top_k) if self.use_rae else self.playbook_manager.playbook,
@@ -710,7 +894,6 @@ class ACEMementoRunner:
                                 print(f"Corrected reasoning on round {r}!")
                                 break
 
-                        # Store distilled insights from the last reflection into memory
                         if self.use_failure_memory and self.failure_memory and reflection not in ("(empty)", ""):
                             try:
                                 parsed = json.loads(reflection) if isinstance(reflection, str) else {}
@@ -724,6 +907,18 @@ class ACEMementoRunner:
                                 root_cause=parsed.get("root_cause_analysis", ""),
                                 key_insight=parsed.get("key_insight", ""),
                             )
+
+                        self._store_memory(
+                            query=query,
+                            plan=trajectory.get("plan_json", ""),
+                            reward=0,
+                            final_answer=initial_answer,
+                            reasoning_trace=trajectory.get("plan_json", ""),
+                            bullet_ids_used=bullet_ids_used,
+                            error_identification=parsed.get("error_identification", ""),
+                            root_cause=parsed.get("root_cause_analysis", ""),
+                            key_insight=parsed.get("key_insight", ""),
+                        )
 
                         stats = self.curator.get_playbook_stats(self.playbook_manager.playbook)
                         updated_playbook, self.next_global_id, operations, _ = self.curator.curate(
@@ -740,7 +935,6 @@ class ACEMementoRunner:
                         )
                         self.playbook_manager.update_playbook(updated_playbook)
 
-                    # Run adversarial episode
                     if self.use_adversarial and self.adversarial_agent:
                         await self._run_adversarial_episode(
                             step_id=f"online_s{global_step}",
@@ -755,7 +949,6 @@ class ACEMementoRunner:
                             data_processor=data_processor
                         )
 
-                    # Save intermediate playbook at each step
                     save_steps = config.get("save_steps", 50)
                     if global_step % save_steps == 0:
                         step_playbook_path = os.path.join(run_path, f"step_{global_step}_playbook.txt")
@@ -769,16 +962,15 @@ class ACEMementoRunner:
                 "total": total_count
             }
 
-            # Save final playbook and case bank
             final_playbook_path = os.path.join(run_path, "final_playbook.txt")
             with open(final_playbook_path, "w", encoding="utf-8") as f:
                 f.write(self.playbook_manager.playbook)
             
-            # Print final summary banner matching standard ACE format
             print(f"\n{'='*60}")
             print(f"ONLINE TRAIN AND TEST COMPLETE")
             print(f"{'='*60}")
             print(f"Mode: {mode.upper()}")
+            print(f"Memory System: {'AMORE' if self.use_amore else 'CaseBank'}")
             print(f"Initial Test Accuracy: {initial_test_accuracy:.3f}")
             print(f"Final Test Accuracy: {final_test_accuracy:.3f}")
             print(f"Results saved to: {run_path}")
@@ -807,7 +999,6 @@ class ACEMementoRunner:
             total_eval_time = eval_end_time - eval_start_time
             avg_run_time = total_eval_time / len(test_samples) if test_samples else 0.0
 
-            # Stop VRAM monitor and get metrics
             avg_vram = None
             gpu_averages = None
             if vram_monitor:
@@ -818,21 +1009,19 @@ class ACEMementoRunner:
 
             results["test_results"] = test_res
             
-            # Calculate LLM speeds
             llm_stats = calculate_llm_statistics(log_dir)
             
             results["total_running_time"] = total_eval_time
             results["avg_running_time_per_sample"] = avg_run_time
             results["llm_statistics"] = llm_stats
             
-            # Print statistics
             print_eval_statistics_banner(total_eval_time, avg_run_time, llm_stats, avg_vram=avg_vram, gpu_averages=gpu_averages)
             
-            # Print final summary banner matching standard ACE format
             print(f"\n{'='*60}")
             print(f"RUN COMPLETE")
             print(f"{'='*60}")
             print(f"Mode: {mode.upper()}")
+            print(f"Memory System: {'AMORE' if self.use_amore else 'CaseBank'}")
             print(f"Test Accuracy: {test_res['accuracy']:.3f} ({test_res['correct']}/{test_res['total']} samples correct)")
             print(f"Results saved to: {run_path}")
             print(f"{'='*60}\n")
@@ -861,8 +1050,11 @@ class ACEMementoRunner:
             context = sample.get("context", "")
             target = sample.get("target", "")
 
-            retrieved_cases = self.case_bank.retrieve_cases(query)
-            cases_text = self.case_bank.format_cases_for_prompt(retrieved_cases)
+            retrieved_cases, cases_text = self._retrieve_memory_with_adaptive(
+                query=query,
+                round_idx=0,
+                previous_error=None
+            )
             playbook = self.playbook_manager.retrieve_bullets(query, self.rae_top_k) if self.use_rae else self.playbook_manager.playbook
 
             try:
@@ -880,7 +1072,6 @@ class ACEMementoRunner:
                 print(f"Error evaluating validation sample {step}: {e}")
                 return "No final answer found", target
 
-        # Run concurrently using a Semaphore to respect config.test_workers
         test_workers = config.get("test_workers", 5)
         sem = asyncio.Semaphore(test_workers)
         async def sem_eval(step, sample):
@@ -916,8 +1107,11 @@ class ACEMementoRunner:
             context = sample.get("context", "")
             target = sample.get("target", "")
 
-            retrieved_cases = self.case_bank.retrieve_cases(query)
-            cases_text = self.case_bank.format_cases_for_prompt(retrieved_cases)
+            retrieved_cases, cases_text = self._retrieve_memory_with_adaptive(
+                query=query,
+                round_idx=0,
+                previous_error=None
+            )
             p = self.playbook_manager.retrieve_bullets(query, self.rae_top_k) if self.use_rae else playbook
 
             try:
@@ -999,8 +1193,11 @@ class ACEMementoRunner:
         vulnerability_hint = attack.get("vulnerability_hint", "")
 
         playbook = self.playbook_manager.retrieve_bullets(adv_question, self.rae_top_k) if self.use_rae else self.playbook_manager.playbook
-        retrieved_cases = self.case_bank.retrieve_cases(adv_question)
-        cases_text = self.case_bank.format_cases_for_prompt(retrieved_cases)
+        retrieved_cases, cases_text = self._retrieve_memory_with_adaptive(
+            query=adv_question,
+            round_idx=0,
+            previous_error=None
+        )
 
         adv_response, adv_bullet_ids, trajectory = await self.generator.generate(
             question=adv_question,
@@ -1028,8 +1225,11 @@ class ACEMementoRunner:
                 similar_failures = self.failure_memory.retrieve(adv_question)
                 analogical_context = self.failure_memory.format_for_prompt(similar_failures)
             else:
-                neg_cases = [c for c in retrieved_cases if c.get("reward") == 0]
-                analogical_context = self.case_bank.format_cases_for_prompt(neg_cases)
+                retrieved_cases, analogical_context = self._retrieve_memory_with_adaptive(
+                    query=adv_question,
+                    round_idx=1,
+                    previous_error="adversarial"
+                )
 
             reflection_content, bullet_tags, _ = self.reflector.reflect(
                 question=adv_question,
@@ -1061,6 +1261,18 @@ class ACEMementoRunner:
                     root_cause=parsed.get("root_cause_analysis", ""),
                     key_insight=parsed.get("key_insight", ""),
                 )
+
+            self._store_memory(
+                query=adv_question,
+                plan=trajectory.get("plan_json", ""),
+                reward=0,
+                final_answer=adv_answer,
+                reasoning_trace=trajectory.get("plan_json", ""),
+                bullet_ids_used=adv_bullet_ids,
+                error_identification=parsed.get("error_identification", ""),
+                root_cause=parsed.get("root_cause_analysis", ""),
+                key_insight=parsed.get("key_insight", ""),
+            )
 
             stats = self.curator.get_playbook_stats(self.playbook_manager.playbook)
             question_context = (
