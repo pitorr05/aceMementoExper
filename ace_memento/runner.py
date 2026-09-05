@@ -397,7 +397,7 @@ class ACEMementoRunner:
                     print(f"Predicted answer: {final_answer} | Target: {target} | Correct: {is_correct}")
 
                     # 4. Write case to episodic memory (Memento CASE WRITE)
-                    self.case_bank.add_case(query, trajectory["plan_json"], reward)
+                    await self.case_bank.add_case(query, trajectory["plan_json"], reward)
 
                     # 5. Reflect and Curate (ACE context engineering)
                     trajectory_str = json.dumps(trajectory, indent=2)
@@ -676,7 +676,7 @@ class ACEMementoRunner:
                     reward = 1 if is_correct else 0
                     print(f"Predicted: {final_answer} | Target: {target} | Correct: {is_correct}")
 
-                    self.case_bank.add_case(query, trajectory["plan_json"], reward)
+                    await self.case_bank.add_case(query, trajectory["plan_json"], reward)
 
                     trajectory_str = json.dumps(trajectory, indent=2)
                     bullets_used_str = "\n".join([b["original_line"] for b in self.playbook_manager.bullets if b["id"] in bullet_ids_used])
