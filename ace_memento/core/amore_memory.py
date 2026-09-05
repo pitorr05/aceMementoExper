@@ -156,23 +156,19 @@ class AMOREMemory:
         self._buffer.append({"role": "assistant", "content": final_answer or plan})
         
         # --- Step 2: Check if we should split ---
-        should_split, _ = asyncio.run(
-            self.splitter.should_split(question, self._buffer)
-        )
+        should_split, _ = await self.splitter.should_split(question, self._buffer)
         
         if should_split and len(self._buffer) >= 4:
             # --- Step 3: Compress chunk ---
-            chunk = asyncio.run(self.compressor.compress(self._buffer))
+            chunk = await self.compressor.compress(self._buffer)
             self._chunks.append(chunk)
             self._buffer = []
             
             # --- Step 4: Socratic Contradiction Resolution ---
-            has_contradiction, insights = asyncio.run(
-                self.resolver.resolve(
+            has_contradiction, insights = await self.resolver.resolve(
                     chunk_title=chunk.title,
                     raw_conversation=chunk.raw_conversation,
                     ground_truth=plan,
-                )
             )
             
             if not has_contradiction:
