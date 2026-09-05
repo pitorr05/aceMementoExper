@@ -72,7 +72,7 @@ Example:
   "content": "The user asked about calculating operating margin. The assistant explained that operating margin equals operating income divided by revenue, and provided a numerical example with Company A having EBIT of 45k and revenue of 300k, resulting in a 15% margin."}}
 """
         
-        response, _ = await timed_llm_call(
+        response, _ = timed_llm_call(
             self.llm_client,
             self.llm_provider,
             self.llm_model,
