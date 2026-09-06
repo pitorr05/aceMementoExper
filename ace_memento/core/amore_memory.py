@@ -164,6 +164,15 @@ class AMOREMemory:
         
         # --- Step 2: Check if we should split ---
         should_split, _ = await self.splitter.should_split(question, self._buffer)
+
+        if len(self._buffer) >= self.splitter.max_buffer_size:
+            should_split = True
+            print(f"[AMORE] 🔴 Hard limit reached! buffer_size={len(self._buffer)} (max={self.splitter.max_buffer_size})")
+        self.steps_since_consolidation += 1
+        if self.steps_since_consolidation >= self.consolidation_frequency:
+            should_split = True
+            self.steps_since_consolidation = 0
+            print(f"[AMORE] 🔄 Consolidation frequency triggered: {self.consolidation_frequency} steps since last consolidation")
         
         # --- Step 3: AMORE Pipeline (chỉ chạy khi đủ điều kiện) ---
         if should_split and len(self._buffer) >= 4:
