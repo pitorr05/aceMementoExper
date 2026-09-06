@@ -239,6 +239,7 @@ class AMOREMemory:
         # --- Step 4: FALLBACK - KHÔNG LƯU VÀO CASEBANK ---
         # Chỉ tích lũy buffer
         # Khi đạt hard limit (25 messages), pipeline sẽ tự động chạy
+        print(f"[AMORE] ⏳ Fallback: buffer_size={len(self._buffer)} (not stored)")
         return False
     
     def retrieve_cases(
@@ -252,6 +253,7 @@ class AMOREMemory:
         k = top_k or self.top_k
         
         if not self.cases or k <= 0:
+            print(f"[AMORE RETRIEVE] No cases or k=0")
             return []
         
         self._ensure_retriever()
@@ -274,6 +276,8 @@ class AMOREMemory:
             query_embedding=query_embedding,
             k=k,
         )
+        
+        print(f"[AMORE RETRIEVE] Retrieved {len(results)} cases for query: {query[:50]}...")
         
         final_cases = []
         for item in results:
@@ -333,15 +337,40 @@ class AMOREMemory:
     def _rebuild_indices(self):
         """Rebuild embeddings for retrieval."""
         if not self.cases:
+            print("[AMORE INDEX] No cases to rebuild indices")
             self._embeddings = None
             self._corpus_texts = []
             self._retriever = None
             return
         
-        self._corpus_texts = [c["question"] for c in self.cases]
+        print(f"[AMORE INDEX] Rebuilding indices for {len(self.cases)} cases...")
+        
+        # ✅ SỬA: Dùng question + chunk_content
+        self._corpus_texts = []
+        for idx, c in enumerate(self.cases):
+            parts = []
+            
+            # 1. Title (chunk title)
+            if c.get("question"):
+                parts.append(c["question"])
+            
+            # 2. chunk_content (tóm tắt từ Compressor)
+            if c.get("chunk_content"):
+                parts.append(c["chunk_content"])
+            
+            # Ghép lại
+            text = " ".join(parts)
+            self._corpus_texts.append(text)
+            
+            # Print preview của text embedding
+            if idx < 3:  # Chỉ in 3 case đầu
+                print(f"[AMORE INDEX] Case {idx}: text preview: {text[:100]}...")
+        
+        print(f"[AMORE INDEX] Built {len(self._corpus_texts)} texts for embedding")
         
         if self._emb_model is not None:
             try:
+                print(f"[AMORE INDEX] Encoding {len(self._corpus_texts)} texts...")
                 self._embeddings = self._emb_model.encode(
                     self._corpus_texts,
                     convert_to_numpy=True,
@@ -349,24 +378,41 @@ class AMOREMemory:
                     show_progress_bar=False
                 )
                 self._retriever = None
+                print(f"[AMORE INDEX] Encoding complete. Embeddings shape: {self._embeddings.shape}")
             except Exception as e:
                 print(f"[AMORE] Error encoding: {e}")
                 self._embeddings = None
     
     def _update_indices(self, case_entry):
         """Update indices with new case."""
-        self._corpus_texts.append(case_entry["question"])
+        print(f"[AMORE INDEX] Updating indices with new case...")
+        
+        # ✅ SỬA: Giống _rebuild_indices
+        parts = []
+        
+        if case_entry.get("question"):
+            parts.append(case_entry["question"])
+        
+        if case_entry.get("chunk_content"):
+            parts.append(case_entry["chunk_content"])
+        
+        text = " ".join(parts)
+        self._corpus_texts.append(text)
+        
+        print(f"[AMORE INDEX] New case text preview: {text[:100]}...")
         
         if self._emb_model is not None and self._embeddings is not None:
             try:
                 emb = self._emb_model.encode(
-                    [case_entry["question"]],
+                    [text],
                     convert_to_numpy=True,
                     normalize_embeddings=True,
                     show_progress_bar=False
                 )[0]
                 self._embeddings = np.vstack([self._embeddings, emb])
+                print(f"[AMORE INDEX] Updated embeddings. New shape: {self._embeddings.shape}")
             except Exception:
+                print(f"[AMORE INDEX] Error encoding new case, rebuilding...")
                 self._rebuild_indices()
         
         self._retriever = None
@@ -374,6 +420,7 @@ class AMOREMemory:
     def _ensure_retriever(self):
         """Ensure retriever is built."""
         if self._retriever is None and self.cases:
+            print(f"[AMORE RETRIEVER] Building retriever with {len(self.cases)} cases...")
             from .adaptive_retriever import AdaptiveRetriever
             metadata_list = [
                 {
@@ -389,3 +436,4 @@ class AMOREMemory:
                 metadata_list=metadata_list,
                 top_k=self.top_k
             )
+            print(f"[AMORE RETRIEVER] Retriever built successfully")
