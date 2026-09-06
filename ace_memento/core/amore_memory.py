@@ -293,42 +293,43 @@ class AMOREMemory:
     def format_cases_for_prompt(
         self,
         retrieved_cases: List[Dict[str, Any]],
-        max_pos: int = 3,
-        max_neg: int = 3
+        max_cases: int = 4,
+        max_insights_per_case: int = 10,
     ) -> str:
-        """Format retrieved cases (GIỮ NGUYÊN format)."""
+        """
+        Format retrieved cases with:
+        - Context (chunk_content) for understanding the scenario
+        - Socratic Insights (max 10 per case) as new knowledge
+        - NO reward filtering (since reward is not reliable when cases are merged)
+        
+        Args:
+            retrieved_cases: List of retrieved cases from memory
+            max_cases: Maximum number of cases to include (default: 4)
+            max_insights_per_case: Maximum insights per case (default: 10)
+        
+        Returns:
+            Formatted string for prompt
+        """
         if not retrieved_cases:
             return "No previous cases found in Memory."
         
-        positive_cases = [c for c in retrieved_cases if c.get("reward", 0) == 1]
-        negative_cases = [c for c in retrieved_cases if c.get("reward", 0) == 0]
+        prompt_parts = ["### Previous Learnings from Memory:"]
         
-        prompt_parts = []
-        
-        if positive_cases:
-            prompt_parts.append(f"### Successful Examples (reward=1):")
-            for i, case in enumerate(positive_cases[:max_pos], 1):
-                prompt_parts.append(
-                    f"Example {i}:\n"
-                    f"Question: {case['question']}\n"
-                    f"Plan:\n{case['plan']}\n"
-                )
-                if case.get('key_insight'):
-                    prompt_parts.append(f"Key Insight: {case['key_insight']}\n")
-        
-        if negative_cases:
-            prompt_parts.append(f"### Unsuccessful Examples (reward=0):")
-            for i, case in enumerate(negative_cases[:max_neg], 1):
-                prompt_parts.append(
-                    f"Example {i}:\n"
-                    f"Question: {case['question']}\n"
-                    f"Plan:\n{case['plan']}\n"
-                )
-                if case.get('error_identification'):
-                    prompt_parts.append(f"Error: {case['error_identification']}\n")
-        
-        if not prompt_parts:
-            return "No structured examples found in Memory."
+        for i, case in enumerate(retrieved_cases[:max_cases], 1):
+            prompt_parts.append(f"\n**Lesson {i}:**")
+            
+            # 1. Context (ngữ cảnh từ chunk_content)
+            if case.get('chunk_content'):
+                prompt_parts.append(f"Context: {case['chunk_content']}")
+            elif case.get('question'):
+                prompt_parts.append(f"Context: {case['question']}")
+            
+            # 2. Socratic Insights (kiến thức mới)
+            if case.get('socratic_insights'):
+                insights = case['socratic_insights'][:max_insights_per_case]
+                prompt_parts.append("Key Learnings:")
+                for insight in insights:
+                    prompt_parts.append(f"  - {insight}")
         
         return "\n".join(prompt_parts)
     
