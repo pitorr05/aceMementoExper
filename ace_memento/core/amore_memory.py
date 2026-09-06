@@ -2,14 +2,14 @@
 AMORE Memory - Adaptive Memory with Online Refinement & Evolution
 
 GIỮ NGUYÊN cấu trúc CaseBank: question, plan, reward
-THÊM: Socratic Contradiction Resolution (inspired by Nemori but reimagined)
+THÊM: Socratic Contradiction Resolution 
 THÊM: Conversation Splitting + Chunk Compression
 
 Novelty:
 - Learning through contradiction discovery (Socratic method)
 - ONE LLM call for contradiction detection and extraction
 - Hypothesis vs Evidence comparison
-- Fallback direct storage when no chunk is formed
+- Fallback: KHÔNG LƯU (chỉ tích lũy buffer)
 """
 
 import os
@@ -39,6 +39,7 @@ class AMOREMemory:
     - Conversation splitting (detect topic changes)
     - Chunk compression (title + content + raw_conversation)
     - Socratic Contradiction Resolution (hypothesis → contradictions → insights)
+    - Write gating: CHỈ LƯU KHI CÓ CONTRADICTIONS
     """
     
     def __init__(
@@ -149,82 +150,87 @@ class AMOREMemory:
         Add case - GIỮ NGUYÊN question, plan, reward + Socratic Contradiction Resolution.
         
         Returns:
-            True if stored, False if filtered out (no contradictions)
+            True if stored (with contradictions), False if filtered out
         """
-        # --- Step 1: Buffer messages ---
+        # --- Step 1: Buffer messages (LƯU CẢ final_answer VÀ plan) ---
         self._buffer.append({"role": "user", "content": question})
-        self._buffer.append({"role": "assistant", "content": final_answer or plan})
+        
+        # 🔧 Lưu cả final_answer và plan vào buffer
+        # Vì plan là JSON string chứa reasoning + final_answer
+        assistant_content = plan if plan else final_answer
+        self._buffer.append({"role": "assistant", "content": assistant_content})
+        
+        print(f"[AMORE DEBUG] buffer_size={len(self._buffer)}, step={self.step_counter}")
         
         # --- Step 2: Check if we should split ---
         should_split, _ = await self.splitter.should_split(question, self._buffer)
         
+        # --- Step 3: AMORE Pipeline (chỉ chạy khi đủ điều kiện) ---
         if should_split and len(self._buffer) >= 4:
-            # --- Step 3: Compress chunk ---
+            print(f"[AMORE] ✅ Pipeline triggered! buffer_size={len(self._buffer)}")
+            
+            # --- Step 3a: Compress chunk ---
             chunk = await self.compressor.compress(self._buffer)
             self._chunks.append(chunk)
-            self._buffer = []
+            self._buffer = []  # Reset buffer
             
-            # --- Step 4: Socratic Contradiction Resolution ---
+            # --- Step 3b: Socratic Contradiction Resolution ---
             has_contradiction, insights = await self.resolver.resolve(
-                    chunk_title=chunk.title,
-                    raw_conversation=chunk.raw_conversation,
-                    ground_truth=plan,
+                chunk_title=chunk.title,
+                raw_conversation=chunk.raw_conversation,
+                ground_truth=plan,
             )
             
-            if not has_contradiction:
-                print(f"[AMORE] Skipped: no contradictions found")
+            if has_contradiction:
+                # ✅ LƯU CASE VỚI SOCRATIC INSIGHTS
+                case_entry = {
+                    # --- Core fields (giống CaseBank cũ) ---
+                    "question": chunk.title,
+                    "plan": plan,
+                    "reward": int(reward),
+                    
+                    # --- AMORE metadata ---
+                    "final_answer": final_answer,
+                    "reasoning_trace": reasoning_trace,
+                    "bullet_ids_used": bullet_ids_used or [],
+                    "error_identification": error_identification,
+                    "root_cause": root_cause,
+                    "key_insight": key_insight,
+                    
+                    # --- System fields ---
+                    "timestamp": datetime.now().isoformat(),
+                    "access_count": 0,
+                    "utility_score": 0.0,
+                    
+                    # --- Chunk fields ---
+                    "title": chunk.title,
+                    "content": chunk.content,
+                    "chunk_content": chunk.content,
+                    "raw_conversation": chunk.raw_conversation,
+                    
+                    # --- Socratic insights (NOVELTY) ---
+                    "socratic_insights": insights,
+                }
+                
+                self.cases.append(case_entry)
+                self._update_indices(case_entry)
+                self.step_counter += 1
+                self.save()
+                
+                print(f"[AMORE] ✅ Stored case with {len(insights)} Socratic insights")
+                for insight in insights[:3]:
+                    print(f"  - {insight}")
+                
+                return True
+            else:
+                # ❌ KHÔNG LƯU (no contradictions)
+                print("[AMORE] ⏭️ Skipped: no contradictions found")
                 return False
-            
-            # --- Step 5: Store case (GIỮ NGUYÊN cấu trúc) ---
-            case_entry = {
-                "question": chunk.title,  # Dùng title thay vì raw question
-                "plan": plan,
-                "reward": int(reward),
-                "final_answer": final_answer,
-                "reasoning_trace": reasoning_trace,
-                "bullet_ids_used": bullet_ids_used or [],
-                "error_identification": error_identification,
-                "root_cause": root_cause,
-                "key_insight": key_insight,
-                "timestamp": datetime.now().isoformat(),
-                "access_count": 0,
-                "utility_score": 0.0,
-                "chunk_content": chunk.content,
-                "socratic_insights": insights,  # Store contradictions as insights
-            }
-            
-            self.cases.append(case_entry)
-            self._update_indices(case_entry)
-            self.step_counter += 1
-            
-            print(f"[AMORE] Stored case with {len(insights)} Socratic insights")
-            for insight in insights[:3]:
-                print(f"  - {insight}")
-            
-            self.save()
-            return True
         
-        # --- Fallback: Store directly (no chunk) ---
-        case_entry = {
-            "question": question,
-            "plan": plan,
-            "reward": int(reward),
-            "final_answer": final_answer,
-            "reasoning_trace": reasoning_trace,
-            "bullet_ids_used": bullet_ids_used or [],
-            "error_identification": error_identification,
-            "root_cause": root_cause,
-            "key_insight": key_insight,
-            "timestamp": datetime.now().isoformat(),
-            "access_count": 0,
-            "utility_score": 0.0,
-        }
-        
-        self.cases.append(case_entry)
-        self._update_indices(case_entry)
-        self.step_counter += 1
-        self.save()
-        return True
+        # --- Step 4: FALLBACK - KHÔNG LƯU VÀO CASEBANK ---
+        # Chỉ tích lũy buffer
+        # Khi đạt hard limit (25 messages), pipeline sẽ tự động chạy
+        return False
     
     def retrieve_cases(
         self,
