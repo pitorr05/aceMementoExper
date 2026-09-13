@@ -82,13 +82,17 @@ class ContradictionResolver:
         from ace_memento.utils.llm import timed_llm_call
         
         # Retrieve relevant bullets from Playbook
-        bullets = self.playbook_manager.playbook
-        # bullets = self.playbook_manager.retrieve_bullets(chunk_title, top_k=5)   // Phien ban 1 dung rae top_k=5 bullet 
         
-        if not bullets or bullets == self.playbook_manager.playbook:
+        # bullets = self.playbook_manager.retrieve_bullets(chunk_title, top_k=5)   // Phien ban 1 dung rae top_k=5 bullet 
+        bullets = self.playbook_manager.playbook
+        
+        # if not bullets or bullets == self.playbook_manager.playbook:
+        if not bullets :
             return ""
         
-        bullet_contents = [b["content"] for b in self.playbook_manager.bullets[:5]]
+        # bullet_contents = [b["content"] for b in self.playbook_manager.bullets[:5]]
+        bullet_contents = [b["content"] for b in self.playbook_manager.bullets]
+        
         knowledge_text = "\n".join(f"- {k}" for k in bullet_contents)
         
         prompt = f"""
