@@ -82,7 +82,8 @@ class ContradictionResolver:
         from ace_memento.utils.llm import timed_llm_call
         
         # Retrieve relevant bullets from Playbook
-        bullets = self.playbook_manager.retrieve_bullets(chunk_title, top_k=5)
+        bullets = self.playbook_manager.playbook
+        # bullets = self.playbook_manager.retrieve_bullets(chunk_title, top_k=5)   // Phien ban 1 dung rae top_k=5 bullet 
         
         if not bullets or bullets == self.playbook_manager.playbook:
             return ""
