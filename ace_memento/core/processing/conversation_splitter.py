@@ -36,7 +36,7 @@ class ConversationSplitter:
         llm_provider: str,
         llm_model: str,
         confidence_threshold: float = 0.6,
-        max_buffer_size: int = 19,
+        max_buffer_size: int = 15,
     ):
         self.llm_client = llm_client
         self.llm_provider = llm_provider
