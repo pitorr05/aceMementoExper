@@ -294,7 +294,7 @@ class AMOREMemory:
         self,
         retrieved_cases: List[Dict[str, Any]],
         max_cases: int = 4,
-        max_insights_per_case: int = 15,
+        max_insights_per_case: int = 25,
     ) -> str:
         """
         Format retrieved cases with:
