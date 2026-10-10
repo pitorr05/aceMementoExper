@@ -1,8 +1,21 @@
 import os
 import json
+import re
 from utils import extract_answer
 from typing import List, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+# ============================================================
+# SYMPTOM2DISEASE — 22 bệnh closed-set (theo MCE benchmark)
+# ============================================================
+DISEASE_LIST = [
+    "drug reaction", "allergy", "chicken pox", "diabetes", "psoriasis",
+    "hypertension", "cervical spondylosis", "bronchial asthma", "varicose veins",
+    "malaria", "dengue", "arthritis", "impetigo", "fungal infection", "common cold",
+    "gastroesophageal reflux disease", "urinary tract infection", "typhoid",
+    "pneumonia", "peptic ulcer disease", "jaundice", "migraine"
+]
 
 
 def load_data(data_path: str) -> List[Dict[str, Any]]:
@@ -27,6 +40,7 @@ def load_data(data_path: str) -> List[Dict[str, Any]]:
     
     print(f"Loaded {len(data)} samples from {data_path}")
     return data
+
 
 def parse_instruction_and_input(all_context):
     """Parse context to extract question and context parts for finlora_sentiment dataset
@@ -68,6 +82,36 @@ def parse_context_and_question_formula(all_context):
 
     return "", all_context
 
+
+def parse_symptom2disease(all_context):
+    """
+    Parse context for Symptom2Disease dataset (closed-set 22 diseases).
+    
+    Expected format (from .jsonl):
+    - context is a symptom description (raw text)
+    - target is a disease name from the 22-category list
+    
+    This parser provides the LLM with the closed-set list of 22 diseases
+    to enforce benchmark-aligned classification.
+    
+    Returns:
+        (context_text, instruction_with_disease_list)
+    """
+    diseases_str = ", ".join(DISEASE_LIST)
+    
+    instruction = (
+        "You are a medical diagnostician. "
+        "Based on the patient's symptoms described below, diagnose the most likely disease. "
+        f"Possible diagnoses (choose EXACTLY one from this list): {diseases_str}. "
+        "Your answer must be a single disease name from the list above, "
+        "in lowercase, with no extra text, no explanation, no punctuation. "
+        "Example: gastroesophageal reflux disease"
+    )
+    
+    # all_context is the symptom description (from item["question"])
+    return all_context.strip(), instruction
+
+
 class DataProcessor:
     """
     Processor for handling data preprocessing, evaluation and accuracy computation.
@@ -88,7 +132,6 @@ class DataProcessor:
 
         Args:
             raw_data: Raw data from JSONL file
-            parse_fn: data parsing function 
 
         Returns:
             Processed data in standard format
@@ -98,6 +141,8 @@ class DataProcessor:
             parse_fn = parse_instruction_and_input
         elif self.task_name == "formula":
             parse_fn = parse_context_and_question_formula
+        elif self.task_name == "symptom2disease":
+            parse_fn = parse_symptom2disease
         else:
             raise ValueError(f"Unknown task: {self.task_name}")
 
@@ -105,17 +150,29 @@ class DataProcessor:
             context = item.get('context', '')
             target = item.get('target', '')
 
+            # Symptom2Disease uses different keys: "question" / "answer"
+            if self.task_name == "symptom2disease":
+                if 'question' in item and 'answer' in item:
+                    context = item.get('question', '')
+                    target = item.get('answer', '')
+
             # Parse context to extract the actual text to analyze and the instruction
             input_text, question = parse_fn(context)
+
+            # Determine data_source string
+            if self.task_name == "symptom2disease":
+                data_source = "symptom2disease"
+            else:
+                data_source = "finlora"
 
             processed_item = {
                 "context": input_text,  # The actual context text
                 "question": question,   # The instruction/question
-                "target": target,       # Ground truth sentiment
+                "target": target,       # Ground truth
                 "others": {
                     "original_context": context,
                     "task": self.task_name,
-                    "data_source": "finlora"
+                    "data_source": data_source
                 }
             }
 
@@ -161,6 +218,45 @@ class DataProcessor:
             return predicted == ground_truth
         return predicted == ground_truth
     
+    def _symptom2disease_answer_is_correct(self, predicted: str, ground_truth: str) -> bool:
+        """
+        Symptom2Disease specific answer correctness check.
+        
+        Follows MCE benchmark normalization:
+            _normalize(text) = re.sub(r'\\s+', ' ', text.lower().strip()).rstrip('.!?')
+        then exact-match comparison.
+        
+        Additionally supports extracting the diagnosis from a [DIAGNOSIS]...[/DIAGNOSIS]
+        tag, in case the LLM produces that format.
+        """
+        def _norm(text: str) -> str:
+            if not isinstance(text, str):
+                return ""
+            return re.sub(r'\s+', ' ', text.lower().strip()).rstrip('.!?')
+        
+        truth = _norm(ground_truth)
+        if not truth:
+            return False
+        
+        predicted_str = predicted if isinstance(predicted, str) else ""
+        
+        # 1) Try [DIAGNOSIS]...[/DIAGNOSIS] tag (MCE-style)
+        m = re.search(r'\[diagnosis\](.*?)\[/diagnosis\]', predicted_str, re.IGNORECASE | re.DOTALL)
+        if m:
+            if _norm(m.group(1)) == truth:
+                return True
+        
+        # 2) Exact match after normalization (MCE-aligned)
+        pred = _norm(predicted_str)
+        if pred == truth:
+            return True
+        
+        # 3) Fallback: try each line of predicted (LLM sometimes adds prefixes)
+        for line in predicted_str.split("\n"):
+            if _norm(line) == truth:
+                return True
+        
+        return False
     
     def answer_is_correct(self, predicted: str, ground_truth: str) -> bool:
         """
@@ -177,6 +273,8 @@ class DataProcessor:
             return self._finer_answer_is_correct(predicted, ground_truth)
         elif self.task_name == "formula":
             return self._formula_answer_is_correct(predicted, ground_truth)
+        elif self.task_name == "symptom2disease":
+            return self._symptom2disease_answer_is_correct(predicted, ground_truth)
         else:
             raise ValueError(f"Unknown task: {self.task_name}")
     
@@ -208,17 +306,29 @@ class DataProcessor:
 
         for predicted, ground_truth in zip(out, target):
             if self._formula_answer_is_correct(predicted, ground_truth):
-                is_correct = True
                 correct_count += 1
-            else:
-                is_correct = False
 
         accuracy = 0.0
         if len(out) > 0:
             accuracy = correct_count / len(out)
 
         return accuracy
-
+    
+    def _evaluate_symptom2disease_accuracy(self, out: List[str], target: List[str]) -> float:
+        """Symptom2Disease specific accuracy evaluation."""
+        if len(out) != len(target):
+            raise ValueError("Input lists 'out' and 'target' must have the same length.")
+        
+        correct_count = 0
+        for predicted, ground_truth in zip(out, target):
+            if self._symptom2disease_answer_is_correct(predicted, ground_truth):
+                correct_count += 1
+        
+        accuracy = 0.0
+        if len(out) > 0:
+            accuracy = correct_count / len(out)
+        
+        return accuracy
     
     def evaluate_accuracy(self, out: List[str], target: List[str]) -> tuple:
         """
@@ -229,12 +339,13 @@ class DataProcessor:
             target: List of ground truth targets
 
         Returns:
-            tuple: (accuracy, response_list)
+            float: accuracy
         """
         if self.task_name in ("finer", "finer_0.5"):
             return self._evaluate_finer_accuracy(out, target)
         elif self.task_name == "formula":
             return self._evaluate_formula_accuracy(out, target)
+        elif self.task_name == "symptom2disease":
+            return self._evaluate_symptom2disease_accuracy(out, target)
         else:
             raise ValueError(f"Unknown task: {self.task_name}")
-    
