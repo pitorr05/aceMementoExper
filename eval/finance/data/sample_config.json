@@ -13,5 +13,10 @@
         "train_data": "./eval/finance/data/formula_train_subset_500.jsonl",
         "val_data": "./eval/finance/data/formula_val_subset_300.jsonl",
         "test_data": "./eval/finance/data/formula_test.jsonl"
+    },
+    "symptom2disease": {
+        "train_data": "./eval/finance/data/symptom2disease_train.jsonl",
+        "val_data": "./eval/finance/data/symptom2disease_val.jsonl",
+        "test_data": "./eval/finance/data/symptom2disease_test.jsonl"
     }
 }
