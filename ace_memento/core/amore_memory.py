@@ -294,7 +294,8 @@ class AMOREMemory:
         self,
         retrieved_cases: List[Dict[str, Any]],
         max_cases: int = 4,
-        max_insights_per_case: int = 10,
+        # max_insights_per_case: int = 10,
+        max_insights_per_case: int = None,
     ) -> str:
         """
         Format retrieved cases with:
@@ -326,7 +327,11 @@ class AMOREMemory:
             
             # 2. Socratic Insights (kiến thức mới)
             if case.get('socratic_insights'):
-                insights = case['socratic_insights'][:max_insights_per_case]
+                #insights = case['socratic_insights'][:max_insights_per_case]
+                if max_insights_per_case is not None:
+                    insights = case['socratic_insights'][:max_insights_per_case]
+                else : 
+                    insights = case['socratic_insights']
                 prompt_parts.append("Key Learnings:")
                 for insight in insights:
                     prompt_parts.append(f"  - {insight}")
