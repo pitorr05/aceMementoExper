@@ -89,6 +89,8 @@ class ConversationSplitter:
         prompt = f"""
 You are analyzing a conversation flow to detect topic boundaries.
 
+Chunks are later compared against knowledge to detect contradictions, so each chunk should stay on one coherent topic. When a new message starts a different task, question, or subject, it should begin a new chunk.
+
 Recent conversation context:
 {context}
 
@@ -101,6 +103,7 @@ Guidelines:
 - Look for topic shifts, new subjects, or unrelated content
 - Consider temporal markers ("by the way", "anyway", "on another note")
 - Consider intent shifts (question → statement, info-seeking → decision)
+- Continuations, clarifications, or corrections on the same topic should NOT trigger a split.
 
 Respond with JSON:
 {{"should_split": true/false, "confidence": 0.0-1.0, "reason": "brief explanation"}}
