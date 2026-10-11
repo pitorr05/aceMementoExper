@@ -96,7 +96,8 @@ class ContradictionResolver:
         knowledge_text = "\n".join(f"- {k}" for k in bullet_contents)
         
         prompt = f"""
-Based on existing knowledge, form a hypothesis about this conversation.
+Based on the existing knowledge below, form a hypothesis about what this conversation likely contains. 
+The hypothesis will be compared against the actual conversation to detect contradictions. It should therefore state concrete claims, rules, or expectations that could be proven wrong by the evidence.
 
 Existing knowledge:
 {knowledge_text}
@@ -140,32 +141,45 @@ If no hypothesis can be formed, output "NO_HYPOTHESIS".
         # Cold start: no hypothesis to contradict
         if not hypothesis:
             prompt = f"""
-Extract all important facts from this conversation.
+Extract important, reusable facts from this conversation.
 
 CONVERSATION:
 {raw_text}
-
+Rules:
+- Only include facts that would help a future solver handle similar tasks.
+- Do not include conversational filler.
+- Do not invent facts.
 Output each fact as a separate line.
 If nothing important, output "NO_FACTS".
 """
         else:
             # Find contradictions between hypothesis and evidence
             prompt = f"""
-Find contradictions between the hypothesis and the actual conversation.
+Compare the HYPOTHESIS (what we believed) with the EVIDENCE (what the conversation actually shows).
+
+A contradiction exists when:
+- The hypothesis claims X, but the evidence shows the opposite of X.
+- The hypothesis claims X unconditionally, but the evidence shows X only holds under an additional condition not stated in the hypothesis.
+
+Report ONLY genuine contradictions. Do not report:
+- New facts that do not contradict the hypothesis.
+- Information merely absent from the hypothesis.
+- Additional conditions that do not contradict the original claim.
+
+For each contradiction, state:
+1) what the hypothesis claimed, and
+2) what the evidence shows instead.
+
+Output each contradiction as a separate line.
+If no genuine contradiction exists, output "NO_CONTRADICTIONS".
 
 HYPOTHESIS (what we believed would be there):
 {hypothesis}
 
 EVIDENCE (what the conversation actually shows):
 {raw_text}
-
-Extract ONLY the information that CONTRADICTS or is ABSENT from the hypothesis.
-These are the learning opportunities - what we got wrong or missed.
-
-Output each contradiction as a separate line.
-If no contradictions found, output "NO_CONTRADICTIONS".
 """
-        
+     
         response, _ = timed_llm_call(
             self.llm_client,
             self.llm_provider,
