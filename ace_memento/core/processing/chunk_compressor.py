@@ -52,7 +52,7 @@ class ChunkCompressor:
         conversation = self._format_conversation(messages)
         
         prompt = f"""
-Create a structured memory chunk from this conversation.
+Create a structured memory chunk from this conversation.This chunk will later be compared against existing knowledge to detect contradictions, so it must faithfully preserve the claims, conditions, and conclusions actually present in the conversation.
 
 Conversation:
 {conversation}
@@ -62,10 +62,12 @@ Output JSON with:
 - "content": A third-person narrative summary (2-3 sentences)
 
 Requirements:
-- Title should be concise and descriptive of the key theme
-- Content should be in third-person perspective
-- Preserve key information without adding new facts
-- Do not include conversational filler
+- Title should be concise and descriptive of the key theme, and specific enough to be searchable.
+- Content should be in third-person perspective.
+- Preserve key information without adding new facts.
+- Preserve any stated conditions, exceptions, quantities, or conclusions that could matter for future comparison.
+- Distinguish claims stated as fact from proposals or suggestions.
+- Do not include conversational filler.
 
 Example:
 {{"title": "Operating Margin Calculation Example",
