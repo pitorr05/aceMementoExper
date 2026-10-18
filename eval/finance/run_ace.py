@@ -95,8 +95,6 @@ def parse_args():
     # ---- Output ----
     parser.add_argument("--save_path", type=str, default=None,
                         help="Directory to save results")
-    parser.add_argument("--resume_from", type=str, default=None,
-                        help="Path to an existing run folder to resume from")
     parser.add_argument("--seed", type=int, default=42)
 
     return parser.parse_args()
@@ -173,27 +171,8 @@ def main():
     """Main execution function for ACE original."""
     args = parse_args()
 
-    if not args.resume_from and not args.save_path:
-        raise ValueError("Either --save_path or --resume_from must be specified")
-
-    # ---- Resume handling ----
-    import sys
-    if args.resume_from:
-        config_path = os.path.join(args.resume_from, "run_config.json")
-        if os.path.exists(config_path):
-            print(f">>> [INFO] Reloading parameters from {config_path}")
-            with open(config_path, "r", encoding="utf-8") as f:
-                saved_config = json.load(f)
-
-            passed_keys = []
-            for arg in sys.argv[1:]:
-                if arg.startswith("--"):
-                    key = arg[2:].split("=")[0].replace("-", "_")
-                    passed_keys.append(key)
-
-            for k, v in saved_config.items():
-                if hasattr(args, k) and k not in passed_keys:
-                    setattr(args, k, v)
+    if not args.save_path:
+        raise ValueError("--save_path must be specified")
 
     set_global_seed(args.seed)
     print(f"Using seed: {args.seed}")
@@ -274,7 +253,7 @@ def main():
         test_samples = test_samples[:50]
         print(f">>> [INFO] Limited test samples to first 50 for quick verification")
 
-    # ---- Run ----
+    # ---- Run (KHÔNG truyền resume_from) ----
     results = ace_system.run(
         mode=args.mode,
         train_samples=train_samples,
@@ -282,7 +261,6 @@ def main():
         test_samples=test_samples,
         data_processor=data_processor,
         config=config,
-        resume_from=args.resume_from
     )
 
     print(f"\n{'='*60}")
