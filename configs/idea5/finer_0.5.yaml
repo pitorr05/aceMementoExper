@@ -1,0 +1,15 @@
+# Benchmark settings: archived ACE runs, origin/idea4 data adapters.
+task: finer_0.5
+model: Qwen/Qwen3-4B-Instruct-2507
+max_tokens: 4096
+seed: 42
+num_epochs: 1
+eval_steps: 50
+save_steps: 50
+workers: 10
+playbook_token_budget: 80000
+# New method settings (not legacy ACE reflection-round settings).
+update_every: 25
+max_candidates: 2
+replay_size: 16
+timeout_seconds: 300

@@ -1,0 +1,6 @@
+# Install the client on the machine invoking the existing vLLM server.
+openai>=1.0.0
+PyYAML>=6.0
+numpy>=1.24
+python-dotenv>=1.0
+tiktoken>=0.12.0

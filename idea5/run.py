@@ -1,0 +1,55 @@
+"""Run exactly one configured dataset: python -m idea5.run --config FILE."""
+import argparse
+import json
+from pathlib import Path
+import subprocess
+
+from .agents import Agents, LocalModel, ROOT
+from .data import load
+from .runner import Runner, atomic_json
+
+
+def main():
+    import yaml
+    parser = argparse.ArgumentParser(__doc__)
+    parser.add_argument('--config', required=True)
+    parser.add_argument('--output', help='New output directory; refuses to overwrite a run')
+    parser.add_argument('--resume', help='Resume a checkpoint directory with identical config/data')
+    parser.add_argument('--check-data', action='store_true', help='Inspect full splits without model calls or writing outputs')
+    args = parser.parse_args()
+    config = yaml.safe_load(Path(args.config).read_text(encoding='utf-8'))
+    required = {'task', 'model', 'max_tokens', 'seed', 'num_epochs', 'eval_steps', 'save_steps',
+                'workers', 'playbook_token_budget', 'update_every', 'max_candidates', 'replay_size'}
+    if required - config.keys():
+        raise ValueError('Missing config keys: ' + str(required-config.keys()))
+    for key in required-{'task', 'model'}:
+        if not isinstance(config[key], int) or config[key] < (0 if key == 'seed' else 1):
+            raise ValueError('Invalid positive integer config: ' + key)
+    if config['max_candidates'] > 2 or config['replay_size'] < 4:
+        raise ValueError('v1 supports at most two candidates and replay_size >= 4')
+    processor, splits, hashes = load(config, ROOT)
+    if args.check_data:
+        print(json.dumps(hashes, indent=2))
+        return
+    if bool(args.resume) and bool(args.output):
+        parser.error('Choose --output or --resume')
+    output = Path(args.resume or args.output or f'results/idea5_{config["task"]}')
+    state = None
+    if args.resume:
+        manifest = json.loads((output/'run_config.json').read_text(encoding='utf-8'))
+        if manifest['config'] != config or manifest['data'] != hashes:
+            raise ValueError('Resume config/data mismatch')
+        state = json.loads((output/'checkpoint.json').read_text(encoding='utf-8'))
+    else:
+        output.mkdir(parents=True, exist_ok=False)
+        revision = subprocess.check_output(['git', '-c', f'safe.directory={ROOT.as_posix()}',
+                                           '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
+        atomic_json(output/'run_config.json', dict(config=config, data=hashes, revision=revision))
+    from utils import count_tokens, set_global_seed
+    set_global_seed(config['seed'])
+    runner = Runner(config, processor, splits, Agents(LocalModel(config, output)), output, count_tokens, state)
+    print('Final test accuracy:', runner.run())
+
+
+if __name__ == '__main__':
+    main()
