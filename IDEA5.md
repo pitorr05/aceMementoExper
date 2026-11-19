@@ -105,15 +105,15 @@ Generator is redirected to the already running Qwen endpoint. Do not put credent
 in YAML files or commits. Then choose one dataset command independently:
 
 ```bash
-python -m idea5.reproduce_mce --config configs/idea5/formula.yaml --output results/mce_formula --iterations 1
+python -m idea5.reproduce_mce --backend claude --config configs/idea5/formula.yaml --output results/mce_formula --iterations 1
 ```
 
 ```bash
-python -m idea5.reproduce_mce --config configs/idea5/finer_0.5.yaml --output results/mce_finer --iterations 1
+python -m idea5.reproduce_mce --backend claude --config configs/idea5/finer_0.5.yaml --output results/mce_finer --iterations 1
 ```
 
 ```bash
-python -m idea5.reproduce_mce --config configs/idea5/symptom2disease.yaml --output results/mce_symptom --iterations 1
+python -m idea5.reproduce_mce --backend claude --config configs/idea5/symptom2disease.yaml --output results/mce_symptom --iterations 1
 ```
 
 The launcher calls the actual upstream `run_iteration`, `run_meta_agent` and
@@ -127,6 +127,10 @@ not reproduction of published MCE scores/models/splits. No SDK/H100 run has been
 performed in this workspace. `--iterations 1` runs one full pass; increase only when
 the experimental protocol calls for additional passes. The Qwen default remains
 one pass and requires no Claude service.
+
+For the upstream file/code workflow with ALL roles using local Qwen, see
+`MCE_QWEN.md` and `python -m mce_ace.run --backend qwen`. That separate baseline
+does not run the idea5 bounded-memory lifecycle.
 
 ## Closed learning loop
 

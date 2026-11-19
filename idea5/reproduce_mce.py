@@ -1,8 +1,4 @@
-"""Run actual vendored MCE orchestration with unchanged ACE task adapters.
-
-Optimization uses upstream Claude Agent SDK. Generator uses the user's vLLM.
-This command does NOT pretend that a Qwen chat endpoint is a Claude SDK runtime.
-"""
+"""Run upstream MCE on ACE datasets: Qwen tool runtime (default) or Claude SDK."""
 import argparse
 import asyncio
 import hashlib
@@ -40,6 +36,8 @@ def make_environment(task, processor, workers):
             return (f'ACE benchmark {task}; preserve task question/context and output format. '
                     'Learn reusable knowledge and implement get_context(question, context). '
                     'Use training feedback only. No task-answer lookup tables. '
+                    'get_context must use only learned local files and pure Python; do not call LLMs '
+                    'or import the training utils package at inference. Auxiliary utils are for learning only. '
                     'Use portable paths based on __file__ for your context files.')
 
         def load_samples(self, path, limit=None, random_sample=False, shuffle=False):
@@ -73,10 +71,17 @@ def make_environment(task, processor, workers):
     return ACEEnvironment
 
 
-async def execute(config, output, iterations):
+async def execute(config, output, iterations, backend='qwen'):
     from .upstream import builders
     builders()
-    # Import SDK-dependent runtime only in explicit reproduction mode.
+    verify_source()
+    if backend == 'qwen':
+        from mce_ace.runtime import install
+        install(config, output)
+        os.environ['VLLM_BASE_URL']=os.getenv('VLLM_BASE_URL','http://127.0.0.1:5000/v1')
+        os.environ['MCE_QWEN_MODEL']=config['model']
+        os.environ['MCE_MAX_TOKENS']=str(config['max_tokens'])
+    # Import upstream runtime after selecting optimizer transport.
     from mce import main as upstream
     from mce.eval import batch_evaluate, load_interfaces
     from mce.logging_utils import setup_logger
@@ -92,7 +97,8 @@ async def execute(config, output, iterations):
     paths = config.get('data', paths)
     paths = {k: str((ROOT/Path(v)).resolve()) if not Path(v).is_absolute() else v for k, v in paths.items()}
     atomic_json(output/'run_config.json', dict(config=config, data=hashes, upstream=verify_source()['revision'],
-                    protocol='MCE SDK loop with ACE data/order/metric/Generator adapter', iterations=iterations))
+                    protocol='MCE upstream loop with ACE data/order/metric/Generator adapter',
+                    backend=backend, iterations=iterations))
     env_name = 'ace_'+config['task']
     EnvironmentRegistry.register(env_name, make_environment(config['task'], processor, config['workers']))
     # Upstream averages per-example metrics. FiNER requires label-weighted totals.
@@ -113,13 +119,28 @@ async def execute(config, output, iterations):
         def __init__(self, model):
             self.agents = Agents(LocalModel(config, output))
     upstream.LLMClient = EvalClient
+    if backend == 'qwen':
+        # Preserve workspace setup; replace only helpers otherwise hardcoded to a
+        # hosted DeepSeek/embedding API, so no auxiliary call escapes to a provider.
+        import shutil
+        original_setup=upstream.setup_base_agent_workspace
+        def local_setup(*args,**kwargs):
+            result=original_setup(*args,**kwargs)
+            folder=Path(args[1] if len(args)>1 else kwargs['iter_folder'])
+            helpers=ROOT/'mce_ace'
+            (folder/'utils').mkdir(exist_ok=True)
+            (folder/'utils/__init__.py').write_text('',encoding='utf-8')
+            shutil.copyfile(helpers/'local_llm.py',folder/'utils/llm.py')
+            shutil.copyfile(helpers/'local_embedding.py',folder/'utils/embedding.py')
+            return result
+        upstream.setup_base_agent_workspace=local_setup
     logger = setup_logger(name='mce_ace_reproduction', log_dir=str(output/'logs'))
     setup_meta_agent_reference(workspace, paths['train_data'], len(splits['train']), logger)
     results = []
     for iteration in range(1, iterations+1):
         result = await upstream.run_iteration(workspace, iteration, env_name, paths['val_data'], paths['train_data'],
                 len(splits['train']), len(splits['val']), config['model'], logger, output,
-                train_batch_size=config['update_every'])
+                train_batch_size=config.get('train_batch_size',config.get('update_every',50)))
         if 'error' in result:
             raise RuntimeError(result['error'])
         results.append(result)
@@ -139,19 +160,27 @@ def main():
     parser.add_argument('--config')
     parser.add_argument('--output')
     parser.add_argument('--iterations', type=int, default=1)
+    parser.add_argument('--backend',choices=['qwen','claude'],default='qwen')
     parser.add_argument('--verify-source', action='store_true')
+    parser.add_argument('--check-data',action='store_true',help='Validate ACE paths and full split hashes without model calls')
     args = parser.parse_args()
     if args.verify_source:
         print(json.dumps(dict(revision=verify_source()['revision'], status='verified')))
         return
+    if args.check_data:
+        if not args.config:
+            parser.error('--check-data requires --config')
+        _,_,hashes=load(yaml.safe_load(Path(args.config).read_text()),ROOT)
+        print(json.dumps(hashes,indent=2))
+        return
     if not args.config or not args.output or args.iterations < 1:
         parser.error('Provide --config, --output and positive --iterations')
-    if not os.getenv('ANTHROPIC_API_KEY') and not os.getenv('ANTHROPIC_AUTH_TOKEN'):
+    if args.backend == 'claude' and not os.getenv('ANTHROPIC_API_KEY') and not os.getenv('ANTHROPIC_AUTH_TOKEN'):
         parser.error('Original MCE optimizer requires Claude SDK authentication; Qwen-only runs use idea5.run')
     config = yaml.safe_load(Path(args.config).read_text())
     from utils import set_global_seed
     set_global_seed(config['seed'])
-    asyncio.run(execute(config, Path(args.output).resolve(), args.iterations))
+    asyncio.run(execute(config, Path(args.output).resolve(), args.iterations,args.backend))
 
 
 if __name__ == '__main__':

@@ -1,0 +1,11 @@
+# Original MCE loop; benchmark input, prompt, evaluator and order follow ACE.
+task: symptom2disease
+model: Qwen/Qwen3-4B-Instruct-2507
+max_tokens: 4096
+seed: 42
+workers: 20
+train_batch_size: 50
+timeout_seconds: 300
+agent_max_turns: 30
+# Works with an already-running OpenAI-compatible vLLM server, without a tool parser.
+tool_transport: json
