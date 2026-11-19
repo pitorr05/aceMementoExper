@@ -51,6 +51,19 @@ class LocalGenerator:
 
 
 class QwenMCETests(unittest.TestCase):
+    def test_invalid_python_write_preserves_previous_interface(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'get_context.py'
+            original = 'def get_context(question, context):\n    return ""\n'
+            path.write_text(original, encoding='utf-8')
+            client = object.__new__(QwenSDKClient)
+            client.cwd = Path(folder)
+            client.options = ClaudeAgentOptions(allowed_tools=['Write'])
+            with self.assertRaisesRegex(ValueError, 'previous file preserved'):
+                asyncio.run(client.tool('Write', dict(file_path=str(path),
+                    content=r'def get_context(question, context):\n    return ""')))
+            self.assertEqual(path.read_text(encoding='utf-8'), original)
+
     def tearDown(self):
         for logger in logging.Logger.manager.loggerDict.values():
             if isinstance(logger,logging.Logger):

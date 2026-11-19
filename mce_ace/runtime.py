@@ -72,6 +72,9 @@ class QwenSDKClient:
             'the requested artifacts. Use native tool calls, not XML or imagined tool results. '
             'Read the learning-context skill before base-level context engineering. '
             'Only available tools are listed; no subagents are available. Finish only after writing files. '
+            'For Python files, Write.content must decode to real source lines, not literal backslash-n '
+            'between statements. Store long knowledge text in context/*.md and read it from Python '
+            'using paths based on __file__; avoid embedding multiline text in ordinary quoted strings. '
             'Use Bash for short code checks; write source with Write. Working directory: '+str(self.cwd)))]
         factory = self.client_factory or OpenAI
         self.client = factory(base_url=os.getenv('VLLM_BASE_URL', 'http://127.0.0.1:5000/v1'),
@@ -209,7 +212,9 @@ class QwenSDKClient:
             offset = max(0,args.get('offset',1)-1)
             return '\n'.join(lines[offset:offset+max(1,args.get('limit',250))])
         if name == 'Write':
-            path = Path(args['file_path']); path.parent.mkdir(parents=True,exist_ok=True)
+            path = Path(args['file_path'])
+            self.check_python(path, args['content'])
+            path.parent.mkdir(parents=True,exist_ok=True)
             path.write_text(args['content'],encoding='utf-8')
             return 'Written '+str(path)
         if name == 'Edit':
@@ -217,7 +222,9 @@ class QwenSDKClient:
             old = args['old_string']
             if not old or old not in text or (not args.get('replace_all') and text.count(old)!=1):
                 raise ValueError('old_string must match exactly; use unique context')
-            path.write_text(text.replace(old,args['new_string'], -1 if args.get('replace_all') else 1),encoding='utf-8')
+            updated = text.replace(old,args['new_string'], -1 if args.get('replace_all') else 1)
+            self.check_python(path, updated)
+            path.write_text(updated,encoding='utf-8')
             return 'Edited '+str(path)
         if name == 'Glob':
             root = self.path(args['path'])
@@ -239,6 +246,20 @@ class QwenSDKClient:
         if name == 'Bash':
             return await asyncio.to_thread(self.shell,args['command'],min(args.get('timeout',60),120))
         raise ValueError('Unsupported tool '+name)
+
+    @staticmethod
+    def check_python(path, content):
+        if path.suffix != '.py':
+            return
+        try:
+            compile(content, str(path), 'exec')
+        except (SyntaxError, ValueError) as error:
+            raise ValueError(
+                f'Python source rejected; previous file preserved. {error}. '
+                'Use real newlines between Python statements after JSON decoding. '
+                'Do not replace every backslash-n globally: escapes inside strings may be intentional. '
+                'Put long knowledge in context/*.md and load it using __file__. '
+                'Rewrite the complete valid Python file with Write.') from error
 
     def shell(self,command,timeout):
         if os.name == 'nt':
