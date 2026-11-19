@@ -94,6 +94,7 @@ class QwenSDKClient:
     async def receive_response(self):
         tools = [t for t in TOOLS if t['function']['name'] in self.options.allowed_tools]
         json_tools = self.config.get('tool_transport','json') == 'json'
+        completed_write_batches = set()
         if json_tools:
             instruction = ('Tool protocol: reply with JSON {"text":"optional explanation",'
                            '"tool_calls":[{"name":"Read", "arguments":{"file_path":"..."}}]} '
@@ -138,6 +139,31 @@ class QwenSDKClient:
                 if not text:
                     raise RuntimeError('Empty Qwen optimizer response')
                 return  # Upstream verifies files/interfaces and sends repair feedback if needed.
+            # Some chat models keep resubmitting the exact same completed Write
+            # batch instead of ending the turn. Do not spend the remaining turn
+            # budget rewriting identical files: let MCE's own interface
+            # validator decide whether the artifacts are usable. A later
+            # validation retry gets a fresh receive_response call and can edit
+            # the files in response to concrete validator feedback.
+            if all(call.function.name == 'Write' for call in calls):
+                write_batch = []
+                for call in calls:
+                    try:
+                        args = json.loads(call.function.arguments)
+                        path = self.path(args['file_path'])
+                        same_content = path.is_file() and path.read_text(encoding='utf-8') == args['content']
+                    except (ValueError, TypeError, KeyError, OSError):
+                        same_content = False
+                    write_batch.append((call.function.name, call.function.arguments, same_content))
+                signature = tuple((name, arguments) for name, arguments, _ in write_batch)
+                if signature in completed_write_batches and all(same for _, _, same in write_batch):
+                    self.messages.append(dict(role='user', content=(
+                        'These exact files are already written. Stop issuing duplicate writes; '
+                        'MCE will validate the current artifacts now.')))
+                    yield AssistantMessage([TextBlock('Identical files are already written; handing control to MCE validation.')],
+                                           self.config['model'])
+                    return
+                completed_write_batches.add(signature)
             for call in calls:
                 try:
                     args = json.loads(call.function.arguments)
