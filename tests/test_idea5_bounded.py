@@ -119,6 +119,18 @@ class BoundedTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 fit_state(state, r.c, len)
 
+    def test_retention_removes_duplicate_metadata_without_changing_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self.fixture(tmp)
+            sample = dict(question='instruction', context='exact input', target='gold',
+                          others={'original_context': 'duplicate input' * 1000})
+            r.state['episodes'] = [dict(id='train-000001', sample=sample,
+                                        prediction='wrong', correct=False, cited=[])]
+            r.enforce()
+            self.assertEqual(r.state['episodes'][0]['sample'],
+                             dict(question='instruction', context='exact input', target='gold'))
+            self.assertIn('others', sample)
+
     def test_reject_legacy_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):

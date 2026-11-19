@@ -25,6 +25,10 @@ def fit_state(state, config, count):
     for episode in result['episodes']:
         episode.pop('raw', None)
         episode.pop('rule_ids', None)
+        # Legacy metadata duplicates the original input. Retain exactly what
+        # the Generator and evaluator need, without altering their contents.
+        episode['sample'] = {key: episode['sample'][key]
+                             for key in ('question', 'context', 'target')}
     while over() and result['pending']:
         result['pending'].pop(0)
     while over() and result['episodes']:

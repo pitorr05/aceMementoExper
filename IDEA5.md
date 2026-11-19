@@ -86,8 +86,8 @@ All three configs use these initial, untuned settings:
 
 | Setting | Default | Includes |
 |---|---:|---|
-| `memory_token_budget` | 80,000 | Entire serialized persistent checkpoint |
-| `knowledge_token_budget` | 16,000 | One serialized knowledge version |
+| `memory_token_budget` | 32,000 | Entire serialized persistent checkpoint |
+| `knowledge_token_budget` | 4,000 | One serialized knowledge version |
 | `evidence_token_budget` | 16,000 | Retained episodes plus pending reflections |
 | `confirmation_examples` | 8 | Subsequent training episodes per trial |
 
@@ -99,7 +99,14 @@ Counts use the legacy `cl100k_base` tokenizer for reproducibility, not the actua
 Qwen tokenizer. Configure the server context window for full prompts and output.
 
 Generated reasoning traces are removed from readable historical evidence; exact
-task input, prediction, target and outcome remain. Under pressure, oldest pending
+task input, prediction, target and outcome remain. Legacy `others` metadata,
+including duplicated `original_context`, is removed from retained samples; the
+Generator question/context and evaluator target remain byte-for-byte unchanged.
+Full metadata stays in write-only audit records. The 32K default reserves up to
+12K for three knowledge versions, 16K for evidence and roughly 4K for other state.
+It is an initial research setting, not a measured optimum. In particular, FiNER's
+long inputs may permit fewer than the maximum 16 replay episodes.
+Under pressure, oldest pending
 reflections are evicted first. Evidence is then evicted by a fixed score favoring
 references from active/parent/selected knowledge, failures, lexical distinctness,
 and recency. Records are removed whole: inputs and labels are not silently cut.
