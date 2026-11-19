@@ -31,6 +31,8 @@ def validate_rule(rule):
 
 
 def apply_patch(rules, patch, evidence_ids, step):
+    if isinstance(patch, dict) and patch.get('operation') == 'replace':
+        return replace_units(rules, patch, evidence_ids, step)
     if not isinstance(patch, dict) or set(patch) != {'operation', 'target_id', 'rules', 'rationale', 'evidence_ids'}:
         raise ValueError('Invalid patch schema')
     if not isinstance(patch['rationale'], str) or not patch['rationale'].strip():
@@ -56,4 +58,28 @@ def apply_patch(rules, patch, evidence_ids, step):
     for index, rule in enumerate(replacements):
         result.append(dict(rule, id=f'rule-{step:06d}-{index}', sources=sources,
                            parent=target, created_step=step))
+    return result
+
+
+def replace_units(rules, patch, evidence_ids, step):
+    """Atomic multi-unit rewrite: revise, merge, split, or exchange knowledge."""
+    if set(patch) != {'operation', 'remove_ids', 'rules', 'rationale', 'evidence_ids'}:
+        raise ValueError('Invalid replacement schema')
+    removed, replacements, sources = patch['remove_ids'], patch['rules'], patch['evidence_ids']
+    if not isinstance(removed, list) or not all(isinstance(x, str) for x in removed):
+        raise ValueError('remove_ids must be strings')
+    if len(set(removed)) != len(removed) or not set(removed) <= {r['id'] for r in rules}:
+        raise ValueError('Unknown/duplicate removal')
+    if not isinstance(replacements, list) or not 1 <= len(replacements) <= 4 or len(removed) > 4:
+        raise ValueError('A transaction replaces at most four units')
+    if not isinstance(sources, list) or not sources or not all(isinstance(x, str) and x in evidence_ids for x in sources):
+        raise ValueError('Unverified evidence reference')
+    if not isinstance(patch['rationale'], str) or not patch['rationale'].strip():
+        raise ValueError('Missing rationale')
+    for rule in replacements:
+        validate_rule(rule)
+    result = [deepcopy(r) for r in rules if r['id'] not in removed]
+    for i, rule in enumerate(replacements):
+        result.append(dict(rule, id=f'rule-{step:06d}-{i}', sources=sources,
+                           parent=list(removed), created_step=step))
     return result

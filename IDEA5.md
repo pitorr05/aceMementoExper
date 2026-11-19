@@ -1,112 +1,126 @@
-# Idea5: evidence-guided Playbook refinement
+# Idea5: bounded knowledge revision (checkpoint schema 2)
 
-Independent offline runner for Qwen3-4B-Instruct-2507, based on `origin/idea4`
-(`d5e88fc`). The legacy ACE and AMORE implementations are retained.
-This is a research implementation, not a demonstrated accuracy improvement or
-a claim of established novelty.
+This version adds atomic replacement transactions, a bounded readable memory,
+and confirmation on later training examples. It is an experimental method;
+no Qwen accuracy improvement or publication novelty has been established.
 
 ## Run one dataset
 
-From the root of this checkout on the machine with access to your vLLM endpoint:
+Install the client dependencies from the checkout root:
 
 ```bash
 python -m pip install -r requirements-idea5.txt
 export VLLM_BASE_URL=http://localhost:5000/v1
 ```
 
-PowerShell equivalent for the endpoint: `$env:VLLM_BASE_URL = 'http://localhost:5000/v1'`.
-The endpoint must serve `Qwen/Qwen3-4B-Instruct-2507`. No paid API or Claude SDK is required.
-The endpoint's maximum context must accommodate the compiled Playbook, task and
-output; 80,000 below is the legacy cl100k token budget, not a Qwen tokenizer count.
+PowerShell endpoint setting: `$env:VLLM_BASE_URL = 'http://localhost:5000/v1'`.
+Use your existing server serving `Qwen/Qwen3-4B-Instruct-2507`.
 
-FiNER (the previously used `finer_0.5` variant):
+Run exactly one of the following commands for the desired dataset:
 
 ```bash
 python -m idea5.run --config configs/idea5/finer_0.5.yaml
 ```
 
-Formula:
-
 ```bash
 python -m idea5.run --config configs/idea5/formula.yaml
 ```
-
-Symptom2Disease:
 
 ```bash
 python -m idea5.run --config configs/idea5/symptom2disease.yaml
 ```
 
-Each command runs only its dataset. Default output is `results/idea5_<task>`;
-an existing directory is rejected. Use `--output results/my_run` for another run.
-There is no all-dataset launcher or automatic baseline sweep.
-
-Inspect paths, hashes and sample counts without a model request:
+Default output is `results/idea5_<task>`. Existing directories are rejected;
+use `--output results/formula_v2` for a new run. No all-dataset launcher exists.
 
 ```bash
 python -m idea5.run --config configs/idea5/formula.yaml --check-data
-```
-
-Resume the same config and dataset from the last atomic step checkpoint:
-
-```bash
 python -m idea5.run --config configs/idea5/formula.yaml --resume results/idea5_formula
 ```
 
-API/transport errors abort instead of silently skipping evaluation samples.
-The interrupted step is retried after resume; calls already spent on it remain
-in the call log. Completed training is not repeated. Resuming a completed run
-evaluates the selected checkpoint on test again. Do not run two writers against
-the same output directory. For exact reproduction, resume on the same revision
-and model server settings recorded at run creation.
+`--check-data` prints full split hashes/counts without model calls. Resume uses
+the same config/data and an atomic step checkpoint. A partly completed step is
+repeated; already incurred calls remain in the log. Resume a completed run to
+reevaluate test. Resume with the same code/model-server settings and one writer.
+Schema-1 checkpoints from the earlier runner are rejected: start a fresh run.
 
-## Learning workflow
+## Closed learning loop
 
-1. Compile the current rules and make one Generator call for the training task.
-2. Score with the unchanged dataset evaluator. Persist question, context, raw
-   output, parsed answer, rule references and the verified training target.
-3. Reflect once into a pending lesson. Reflections are proposals, not verified facts.
-4. Every 25 training examples (also at the end), identify a recent failure and
-   a target rule: cited rule first, lexical input/rule similarity as fallback.
-5. Select up to 16 observed training episodes: anchor, random successful guards
-   (up to four), then nearest input neighbors. Similarity includes context, not
-   just the shared benchmark instruction. This is a diagnostic heuristic, not
-   causal attribution of a failure to a rule.
-6. The meta-agent proposes up to two alternative edits. `add` introduces one
-   rule; `condition` changes only an existing applicability condition; `split`
-   replaces one rule with two conditional rules. `patches: []` keeps state unchanged.
-7. Evaluate parent and candidates on identical replay episodes. A candidate must
-   strictly improve the dataset metric without reducing the guard-group metric.
-   Ties retain the parent. Guard checks are aggregate, not per-example guarantees.
-8. Commit the winning edit, or retain pending lessons. Select the final snapshot
-   using full validation; freeze all memory writes during validation and test.
+1. Compile knowledge and answer the current training task once.
+2. Score with the original evaluator; reflect on the input, prediction and target.
+3. Archive the complete trace for audit; admit a compact evidence record and
+   pending reflection to bounded memory. The learning algorithm never reloads archives.
+4. Every 25 examples, if no transaction is under confirmation, assemble up to
+   16 retained episodes: a recent failure, up to four randomly chosen past
+   successes, and lexical input neighbors. Both question and context are used.
+5. The meta-agent proposes up to two alternative replacement transactions.
+   Each removes zero to four units and inserts one to four units. This supports
+   correction, condition refinement, splitting, merging, and freeing space for
+   new knowledge in the same atomic change. Each new unit has conditions,
+   guidance, group, source IDs, parent IDs and creation step.
+6. Run parent and candidate on identical replay inputs. Accept higher aggregate
+   dataset accuracy, or equal accuracy with fewer serialized knowledge tokens,
+   provided the successful guard-group score does not fall. Budget checks count
+   the candidate AND its rollback parent, selected checkpoint and evidence.
+7. Tentatively use the winning transaction on the next eight training episodes.
+   Independently run its frozen parent on each of those same inputs. Both calls
+   exclude the current target. Only after predictions does the evaluator score them.
+8. Confirm if the candidate aggregate metric is at least the parent's; otherwise
+   restore the parent. No other transaction can overlap this trial. Incomplete
+   trials roll back at stream end or when memory pressure prevents keeping them.
+9. Validation selects only confirmed knowledge (the parent while a trial is
+   active). Test reads the selected checkpoint with one Generator call per item.
 
-Rules contain `id`, `group`, `condition`, `guidance`, evidence IDs, parent and step.
-The deterministic compiler groups them and includes their conditions in the
-Generator context. It does not make an extra model call or route away rules.
-No test labels, generated answer tables, or task-specific percentage heuristics
-are inserted by the implementation. Conditions are proposed in natural language;
-schema validation cannot prove their semantic correctness or generalization.
+No trial starts unless enough future training episodes remain. Thus end-of-stream
+lessons can remain pending without entering the selected knowledge. Later episodes
+provide prospective feedback, not an independent final test; repeated or duplicate
+dataset items are not claimed to be unseen. All test feedback is excluded from learning.
 
-The two-level design is inspired by MCE, but v1 evolves a bounded structured
-Playbook rather than generating arbitrary Python or evolving unrestricted skills.
-The evidence-refinement analogy comes from counterexample-guided abstraction
-refinement; the finite replay checker offers no formal correctness guarantee.
-Episode evidence adapts the earlier memory idea, with verified targets stored
-separately from generated output. This is not an unchanged MCE implementation.
+The compiler renders all admitted units and conditions. Conditions are natural
+language, not an executable router. The meta-agent's prompt and operator set are
+fixed; this implementation does not evolve arbitrary code or MCE learning skills.
 
-## Benchmark compatibility
+## Fixed readable-memory budget
 
-The actual `origin/idea4` `eval/finance/data_processor.py` handles preprocessing
-and scoring; `utils.extract_answer` handles Generator output parsing. The
-Generator uses the original ACE template in `ace/prompts/generator.py` with an
-empty reflection field. It does not use the AMORE Case Memory template, so
-old AMORE runs can differ in more than the memory mechanism.
+All three configs use these initial, untuned settings:
 
-Datasets are resolved using the existing `eval/finance/data/sample_config.json`;
-optional `data: {train_data: ..., val_data: ..., test_data: ...}` in a config
-overrides paths explicitly. Relative data paths are resolved from the repo root.
-No truncation or resampling is performed. Training preserves file order.
+| Setting | Default | Includes |
+|---|---:|---|
+| `memory_token_budget` | 80,000 | Entire serialized persistent checkpoint |
+| `knowledge_token_budget` | 16,000 | One serialized knowledge version |
+| `evidence_token_budget` | 16,000 | Retained episodes plus pending reflections |
+| `confirmation_examples` | 8 | Subsequent training episodes per trial |
+
+The total includes active knowledge, rollback parent, validation-selected knowledge,
+retained evidence, pending reflections, bounded confirmation answers and counters.
+The allocator reserves space for three knowledge versions. The legacy
+`playbook_token_budget: 80000` remains an additional compiled-context ceiling.
+Counts use the legacy `cl100k_base` tokenizer for reproducibility, not the actual
+Qwen tokenizer. Configure the server context window for full prompts and output.
+
+Generated reasoning traces are removed from readable historical evidence; exact
+task input, prediction, target and outcome remain. Under pressure, oldest pending
+reflections are evicted first. Evidence is then evicted by a fixed score favoring
+references from active/parent/selected knowledge, failures, lexical distinctness,
+and recency. Records are removed whole: inputs and labels are not silently cut.
+This retention policy is a heuristic, not a learned optimal allocation policy.
+An oversized episode can be excluded from memory while its audit record survives.
+A new transaction must retain at least one of its cited evidence records. Older
+source IDs can outlive their records; the agent cannot dereference those IDs into
+the archive. The knowledge/rollback snapshots are never implicitly evicted.
+
+Current task input, model-generated candidate proposals and temporary execution
+buffers are working computation, not persistent memory. Dataset arrays are owned
+by the experiment harness; the proposal agent receives only retained past evidence,
+never arbitrary past/future dataset access. Audit/call logs can grow on disk but
+are not searchable tools for the model. Call logs are read only for usage reporting.
+
+## Compatibility and artifacts
+
+Parsers and metrics come unchanged from `eval/finance/data_processor.py` at the
+`origin/idea4` base. Data paths come from `eval/finance/data/sample_config.json`
+unless an explicit config `data` mapping overrides train_data/val_data/test_data.
+Paths are relative to the checkout root; file order and all samples are preserved.
 
 | Task | Train / validation / test | Validation interval | Workers |
 |---|---|---|---|
@@ -114,53 +128,47 @@ No truncation or resampling is performed. Training preserves file order.
 | formula | 500 / 300 / 200 | 100 | 20 |
 | symptom2disease | 200 / 50 / 212 | 50 | 20 |
 
-FiNER uses the legacy aggregate label metric; others use their legacy example
-metrics. Malformed answers remain in the denominator. Historical runs that
-excluded missing responses therefore need denominator reconciliation before
-claiming a directly comparable gain. Recorded data hashes establish the input
-files used by idea5, not proof that every older run used those identical bytes.
+FiNER retains its aggregate label metric. Other tasks retain their example metrics.
+Common settings: one epoch, seed 42, temperature 0, maximum 4096 output tokens,
+snapshot interval 50. Generator uses the original ACE prompt and answer parser;
+the AMORE Case Memory prompt and three-round ACE correction loop are not run.
+Parent confirmation adds training calls only. Empty/malformed outputs remain in
+the denominator; API failures abort instead of silently dropping samples. Historical
+runs with different missing-answer handling or prompts need reconciliation before
+claiming directly comparable gains. New memory allocations are method parameters,
+not inherited benchmark settings.
 
-Common settings: seed 42, one epoch, temperature 0, maximum 4096 output tokens,
-80,000-token stored Playbook budget and snapshots every 50 examples.
-The old three-round ACE correction process is replaced by this method's
-one reflection plus periodic replay; it is not silently run in addition.
-All roles use the same configured Qwen model. Model API retries are disabled;
-empty/malformed responses use the legacy parser rather than dropping samples.
+- `run_config.json`: config, data hashes/counts and code revision.
+- `checkpoint.json`, `snapshot_<step>.json`: bounded schema-2 state for resume.
+- `audit.jsonl`: complete episodes, proposed transactions, replay predictions,
+  evictions, confirmation results and rollbacks; write-only to learning.
+- `validation_<step>.json`: full validation predictions and metric.
+- `best_playbook.json` / `.txt`: selected knowledge and rendered context.
+- `final_test_results.json`: selected step, full test metric/count and predictions.
+- `calls.jsonl`, `usage.json`: raw model requests and aggregate call/token costs.
+  Summed request duration is not wall-clock duration with parallel calls.
 
-## Artifacts and modules
-
-- `run_config.json`: resolved config, split SHA-256/counts and code revision.
-- `checkpoint.json`: atomic current state, episodes, pending reflections,
-  rule lineage, replay predictions and accepted/rejected edits.
-- `snapshot_<step>.json`: periodic complete checkpoint.
-- `validation_<step>.json`: full ordered predictions and metric.
-- `best_playbook.json` / `.txt`: validation-selected rules and compiled context.
-- `final_test_results.json`: selected step, full test count, metric and ordered predictions.
-- `calls.jsonl`: raw prompts/responses, role, server usage and request duration.
-- `usage.json`: total tokens, calls by role and summed request durations
-  (not wall-clock runtime when requests overlap).
-
-`agents.py` owns model-facing prompts, `memory.py` validates edits and compiles
-rules, `runner.py` owns replay/admission/lifecycle, `data.py` adapts legacy data,
-and `run.py` handles config and resume. Meta-agent working traces are bounded to
-4,000 characters per response and 2,000 per pending reflection; original traces
-remain in the checkpoint. Full task input and target evidence are retained.
+`bounded.py` owns the new lifecycle; `budget.py` accounts and prunes readable state;
+`memory.py` validates atomic transactions; `agents.py` contains model-facing prompts.
+The older `Runner` in `runner.py` remains for legacy regression tests and shared
+evaluation utilities; the CLI now uses `BoundedRunner` exclusively.
 
 ## Verification
 
 ```bash
-python -m unittest discover -s tests -p test_idea5.py -v
+python -m unittest discover -s tests -p 'test_idea5*.py' -v
 ```
 
-Tests exercise guarded admission, immutable test evaluation, checkpoint resume,
-split lineage, malformed/unsupported edits, token-budget rejection and exclusion
-of target labels from Generator prompts. They use a fake model and do not measure
-Qwen performance. Real H100 runs are necessary to assess accuracy and runtime.
+Tests cover merge/correction atomicity, equal-score compression, memory bounds,
+rollback/selected-checkpoint accounting, future-regression rollback, successful
+confirmation, interrupted-trial resume, rejection of old checkpoints, exclusion
+of labels from Generator prompts, and a single test call per sample. Model calls
+are fixtures; no H100 benchmark result is implied.
 
-References informing this research implementation:
-- MCE: https://arxiv.org/abs/2601.21557
-- ACE: https://arxiv.org/abs/2510.04618
-- CEGAR: https://www.cs.cmu.edu/~emc/papers/Conference%20Papers/Counterexample-guided%20Abstraction%20Refinement.pdf
-- Related work to distinguish before novelty claims: MemScope
-  https://arxiv.org/abs/2610.21170 and Scope Before You Persist
-  https://arxiv.org/abs/2609.29144
+Research antecedents: [MCE](https://arxiv.org/abs/2601.21557),
+[ACE](https://arxiv.org/abs/2510.04618),
+[CEGAR](https://www.cs.cmu.edu/~emc/papers/Conference%20Papers/Counterexample-guided%20Abstraction%20Refinement.pdf).
+Related work to distinguish before novelty claims includes
+[MemScope](https://arxiv.org/abs/2610.21170),
+[Scope Before You Persist](https://arxiv.org/abs/2609.29144) and
+[Retain or Consolidate?](https://arxiv.org/abs/2607.17545).

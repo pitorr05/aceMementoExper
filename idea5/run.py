@@ -6,7 +6,8 @@ import subprocess
 
 from .agents import Agents, LocalModel, ROOT
 from .data import load
-from .runner import Runner, atomic_json
+from .runner import atomic_json
+from .bounded import BoundedRunner
 
 
 def main():
@@ -19,14 +20,17 @@ def main():
     args = parser.parse_args()
     config = yaml.safe_load(Path(args.config).read_text(encoding='utf-8'))
     required = {'task', 'model', 'max_tokens', 'seed', 'num_epochs', 'eval_steps', 'save_steps',
-                'workers', 'playbook_token_budget', 'update_every', 'max_candidates', 'replay_size'}
+                'workers', 'playbook_token_budget', 'update_every', 'max_candidates', 'replay_size',
+                'memory_token_budget', 'knowledge_token_budget', 'evidence_token_budget', 'confirmation_examples'}
     if required - config.keys():
         raise ValueError('Missing config keys: ' + str(required-config.keys()))
     for key in required-{'task', 'model'}:
         if not isinstance(config[key], int) or config[key] < (0 if key == 'seed' else 1):
             raise ValueError('Invalid positive integer config: ' + key)
     if config['max_candidates'] > 2 or config['replay_size'] < 4:
-        raise ValueError('v1 supports at most two candidates and replay_size >= 4')
+        raise ValueError('Use at most two candidates and replay_size >= 4')
+    if 3*config['knowledge_token_budget'] + config['evidence_token_budget'] >= config['memory_token_budget']:
+        raise ValueError('Reserve room for active, rollback, selected knowledge and evidence plus metadata')
     processor, splits, hashes = load(config, ROOT)
     if args.check_data:
         print(json.dumps(hashes, indent=2))
@@ -47,7 +51,7 @@ def main():
         atomic_json(output/'run_config.json', dict(config=config, data=hashes, revision=revision))
     from utils import count_tokens, set_global_seed
     set_global_seed(config['seed'])
-    runner = Runner(config, processor, splits, Agents(LocalModel(config, output)), output, count_tokens, state)
+    runner = BoundedRunner(config, processor, splits, Agents(LocalModel(config, output)), output, count_tokens, state=state)
     print('Final test accuracy:', runner.run())
 
 

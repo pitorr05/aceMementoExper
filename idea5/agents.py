@@ -70,16 +70,23 @@ class Agents:
         candidates = [dict(c, reflection=c['reflection'][:2000]) for c in candidates]
         prompt = '''You are the meta-agent learning the structure of a Playbook.
 Use scored training episodes and pending reflections to propose at most MAX_PATCHES alternative edits.
-Each edit changes at most one target rule. Allowed operations: add (one new rule; target_id=null),
-condition (only change the target's condition), split (replace target with two conditional rules).
-For condition/split, target_id must be TARGET. A split needs both successful and failed episodes.
+Propose atomic replacement transactions. Each transaction removes zero to four existing units
+and inserts one to four units. You may correct guidance, refine conditions, split a broad unit,
+or merge redundant units to make room for new knowledge. Start with relevant target TARGET,
+but include redundant units elsewhere when consolidation releases useful capacity.
+Use correct and failed episodes to preserve distinguishing conditions and important exceptions.
+Equal-accuracy smaller representations can be accepted; after replay, transactions are tested
+on later training episodes and rolled back if they regress. Prefer compact reusable knowledge.
 Conditions must use observable question/context features, never labels unavailable at inference.
 Keep rules reusable; do not embed a lookup table of training answers. Two different labels alone
 do not justify splitting a rule. Explain the distinguishing input feature and evidence.
 Proposals are alternatives, not a sequence. If evidence is insufficient, return {"patches": []}.
-Output JSON {"patches": [{"operation":"add|condition|split", "target_id":null,
+Output JSON {"patches": [{"operation":"replace", "remove_ids":["existing-rule-id"],
 "rules":[{"group":"topic", "condition":"input condition", "guidance":"instruction"}],
 "rationale":"why", "evidence_ids":["episode-id"]}]}.
 '''.replace('MAX_PATCHES', str(max_candidates)).replace('TARGET', str(target))
         return parse_object(self.model.call(prompt + '\n' + json.dumps(
-            dict(playbook=rules, evidence=evidence, pending=candidates), ensure_ascii=False), 'meta'))
+            dict(playbook=rules, evidence=evidence, pending=candidates,
+                 budgets={k: self.model.config.get(k) for k in ('memory_token_budget',
+                          'knowledge_token_budget', 'evidence_token_budget')}
+                 if hasattr(self.model, 'config') else {}), ensure_ascii=False), 'meta'))

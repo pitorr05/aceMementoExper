@@ -13,3 +13,8 @@ update_every: 25
 max_candidates: 2
 replay_size: 16
 timeout_seconds: 300
+# Total readable persistent state, including rollback and best checkpoint.
+memory_token_budget: 80000
+knowledge_token_budget: 16000
+evidence_token_budget: 16000
+confirmation_examples: 8
