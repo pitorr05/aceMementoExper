@@ -1,0 +1,2 @@
+# Preserve vendored upstream bytes so provenance verification survives checkout.
+third_party/mce/** -text
