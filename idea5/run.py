@@ -4,10 +4,11 @@ import json
 from pathlib import Path
 import subprocess
 
-from .agents import Agents, LocalModel, ROOT
+from .agents import LocalModel, ROOT
 from .data import load
 from .runner import atomic_json
-from .bounded import BoundedRunner
+from .evolution import EvolutionRunner
+from .skills import BaseAgent
 
 
 def main():
@@ -21,7 +22,8 @@ def main():
     config = yaml.safe_load(Path(args.config).read_text(encoding='utf-8'))
     required = {'task', 'model', 'max_tokens', 'seed', 'num_epochs', 'eval_steps', 'save_steps',
                 'workers', 'playbook_token_budget', 'update_every', 'max_candidates', 'replay_size',
-                'memory_token_budget', 'knowledge_token_budget', 'evidence_token_budget', 'confirmation_examples'}
+                'memory_token_budget', 'knowledge_token_budget', 'evidence_token_budget', 'confirmation_examples',
+                'skill_token_budget', 'skill_evolve_every', 'skill_history_size'}
     if required - config.keys():
         raise ValueError('Missing config keys: ' + str(required-config.keys()))
     for key in required-{'task', 'model'}:
@@ -31,6 +33,8 @@ def main():
         raise ValueError('Use at most two candidates and replay_size >= 4')
     if 3*config['knowledge_token_budget'] + config['evidence_token_budget'] >= config['memory_token_budget']:
         raise ValueError('Reserve room for active, rollback, selected knowledge and evidence plus metadata')
+    if config['skill_evolve_every'] % config['update_every']:
+        raise ValueError('skill_evolve_every must be a multiple of update_every')
     processor, splits, hashes = load(config, ROOT)
     if args.check_data:
         print(json.dumps(hashes, indent=2))
@@ -48,10 +52,13 @@ def main():
         output.mkdir(parents=True, exist_ok=False)
         revision = subprocess.check_output(['git', '-c', f'safe.directory={ROOT.as_posix()}',
                                            '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
-        atomic_json(output/'run_config.json', dict(config=config, data=hashes, revision=revision))
+        from .reproduce_mce import verify_source
+        atomic_json(output/'run_config.json', dict(config=config, data=hashes, revision=revision,
+                    mce_source_revision=verify_source()['revision'], backend='qwen_skill_evolution'))
     from utils import count_tokens, set_global_seed
     set_global_seed(config['seed'])
-    runner = BoundedRunner(config, processor, splits, Agents(LocalModel(config, output)), output, count_tokens, state=state)
+    runner = EvolutionRunner(config, processor, splits, BaseAgent(LocalModel(config, output), config['task']),
+                             output, count_tokens, state=state)
     print('Final test accuracy:', runner.run())
 
 

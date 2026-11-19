@@ -29,6 +29,8 @@ def fit_state(state, config, count):
         # the Generator and evaluator need, without altering their contents.
         episode['sample'] = {key: episode['sample'][key]
                              for key in ('question', 'context', 'target')}
+    while over() and result.get('skill_history'):
+        result['skill_history'].pop(0)
     while over() and result['pending']:
         result['pending'].pop(0)
     while over() and result['episodes']:

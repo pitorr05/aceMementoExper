@@ -85,8 +85,10 @@ Output JSON {"patches": [{"operation":"replace", "remove_ids":["existing-rule-id
 "rules":[{"group":"topic", "condition":"input condition", "guidance":"instruction"}],
 "rationale":"why", "evidence_ids":["episode-id"]}]}.
 '''.replace('MAX_PATCHES', str(max_candidates)).replace('TARGET', str(target))
-        return parse_object(self.model.call(prompt + '\n' + json.dumps(
+        prefix = self.learning_prefix() if hasattr(self, 'learning_prefix') else ''
+        return parse_object(self.model.call(prefix + prompt + '\n' + json.dumps(
             dict(playbook=rules, evidence=evidence, pending=candidates,
                  budgets={k: self.model.config.get(k) for k in ('memory_token_budget',
                           'knowledge_token_budget', 'evidence_token_budget')}
-                 if hasattr(self.model, 'config') else {}), ensure_ascii=False), 'meta'))
+                 if hasattr(self.model, 'config') else {}), ensure_ascii=False),
+                 'base_context' if prefix else 'meta'))

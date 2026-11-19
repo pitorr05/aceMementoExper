@@ -18,3 +18,7 @@ memory_token_budget: 32000
 knowledge_token_budget: 4000
 evidence_token_budget: 16000
 confirmation_examples: 8
+# MCE-derived outer loop: evolve a learning skill, executed by the base-agent.
+skill_token_budget: 800
+skill_evolve_every: 50
+skill_history_size: 2
